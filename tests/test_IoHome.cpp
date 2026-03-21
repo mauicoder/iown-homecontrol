@@ -317,75 +317,74 @@ int main() {
 
         // All other virtual methods requiring implementation for a concrete class
         Module* getMod() override { return nullptr; }
-        int16_t begin(float freq, float bw, uint8_t sf, uint8_t cr, uint8_t syncWord, int8_t pwr, uint16_t preamble, float tcxoVoltage, bool use, float tempCoeff) { return RADIOLIB_ERR_NONE; }
-        int16_t beginFSK(float freq, float br, float freqDev, float rxBw, uint8_t syncWordLen, const uint8_t* syncWord, int8_t pwr, uint16_t preambleLen, bool enableOOK) { return RADIOLIB_ERR_NONE; }
-        int16_t end() { return RADIOLIB_ERR_NONE; }
-        int16_t setOutputPower(int8_t power) { return RADIOLIB_ERR_NONE; }
-        int16_t configFSK(float br, float freqDev, float rxBw, uint8_t syncWordLen, const uint8_t* syncWord, uint16_t preambleLen, bool enableOOK) { return RADIOLIB_ERR_NONE; }
-        int16_t startTransmit(const std::string& str, uint8_t addr = 0) { return RADIOLIB_ERR_NONE; }
-        int16_t startReceive(uint32_t timeout, RadioLibIrqFlags_t irqFlags = RADIOLIB_NO_IRQ, RadioLibIrqFlags_t irqMask = RADIOLIB_IRQ_ALL, size_t len = 0) { return startReceiveResult; }
-        int16_t readData(uint8_t* data, size_t len, size_t offset) { return RADIOLIB_ERR_NONE; }
-        int16_t readData(std::string& str) { return RADIOLIB_ERR_NONE; }
-        int16_t readData(std::string& str, size_t len) { return RADIOLIB_ERR_NONE; }
-        int16_t readData(std::string& str, size_t len, size_t offset) { return RADIOLIB_ERR_NONE; }
-        float getSNR() { return 0.0; }
-        float getRSSI() { return 0.0; } // Pure virtual version (no params)
-        size_t getPacketLength() const override { return mockPacketLength; }
-        int16_t fixedPacketLengthMode(size_t len) { return RADIOLIB_ERR_NONE; }
-        int16_t variablePacketLengthMode() { return RADIOLIB_ERR_NONE; }
-        int16_t standby() { return RADIOLIB_ERR_NONE; }
-        int16_t sleep() { return RADIOLIB_ERR_NONE; }
-        int16_t setDioAction(uint32_t pin, uint32_t fnc) { return RADIOLIB_ERR_NONE; }
-        int16_t clearDioAction(uint32_t pin) { return RADIOLIB_ERR_NONE; }
-        int16_t setDataRate(DataRate_t dr, ModemType_t modem = RADIOLIB_MODEM_NONE) { return RADIOLIB_ERR_NONE; }
-        int16_t setDataShaping(uint8_t dataShaping) { return RADIOLIB_ERR_NONE; }
-        int16_t setEncoding(uint8_t encoding) { return RADIOLIB_ERR_NONE; }
-        int16_t setSyncWord(const uint8_t* syncWord, size_t len) { return RADIOLIB_ERR_NONE; }
-        int16_t setPreambleLength(size_t len) { return RADIOLIB_ERR_NONE; }
-        int16_t setGain(uint8_t gain) { return RADIOLIB_ERR_NONE; }
-        int16_t enableTestMode() { return RADIOLIB_ERR_NONE; }
-        int16_t disableTestMode() { return RADIOLIB_ERR_NONE; }
-        float getFrequencyError(bool update = true) { return 0.0; }
-        int32_t random(uint32_t max) { return 0; }
-        int16_t startDirect() { return RADIOLIB_ERR_NONE; }
-        int16_t readRssiDirect() { return RADIOLIB_ERR_NONE; }
-        int16_t launchMode() { return RADIOLIB_ERR_NONE; }
-        uint8_t randomByte() { return 0; }
-        int16_t setBitRate(float br) { return RADIOLIB_ERR_NONE; }
+        int16_t begin(float freq, float bw, uint8_t sf, uint8_t cr, uint8_t syncWord, int8_t pwr, uint16_t preamble, float tcxoVoltage, bool use, float tempCoeff) override { return RADIOLIB_ERR_NONE; }
+        int16_t beginFSK(float freq, float br, float freqDev, float rxBw, uint8_t syncWordLen, const uint8_t* syncWord, int8_t pwr, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; }
+        int16_t end() override { return RADIOLIB_ERR_NONE; }
+        int16_t setOutputPower(int8_t power) override { return RADIOLIB_ERR_NONE; }
+        int16_t configFSK(float br, float freqDev, float rxBw, uint8_t syncWordLen, const uint8_t* syncWord, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; }
+        int16_t startTransmit(const std::string& str, uint8_t addr = 0) override { return RADIOLIB_ERR_NONE; }
+        int16_t startReceive(uint32_t timeout, RadioLibIrqFlags_t irqFlags = RADIOLIB_NO_IRQ, RadioLibIrqFlags_t irqMask = RADIOLIB_IRQ_ALL, size_t len = 0) override { return startReceiveResult; }
+        int16_t readData(uint8_t* data, size_t len, size_t offset) override { return RADIOLIB_ERR_NONE; }
+        int16_t readData(std::string& str) override { return RADIOLIB_ERR_NONE; }
+        int16_t readData(std::string& str, size_t len) override { return RADIOLIB_ERR_NONE; }
+        int16_t readData(std::string& str, size_t len, size_t offset) override { return RADIOLIB_ERR_NONE; }
+        float getSNR() override { return 0.0; }
+        float getRSSI() override { return 0.0; } // Pure virtual version (no params)
+        int16_t fixedPacketLengthMode(size_t len) override { return RADIOLIB_ERR_NONE; }
+        int16_t variablePacketLengthMode() override { return RADIOLIB_ERR_NONE; }
+        int16_t standby() override { return RADIOLIB_ERR_NONE; }
+        int16_t sleep() override { return RADIOLIB_ERR_NONE; }
+        int16_t setDioAction(uint32_t pin, uint32_t fnc) override { return RADIOLIB_ERR_NONE; }
+        int16_t clearDioAction(uint32_t pin) override { return RADIOLIB_ERR_NONE; }
+        int16_t setDataRate(DataRate_t dr, ModemType_t modem = RADIOLIB_MODEM_NONE) override { return RADIOLIB_ERR_NONE; }
+        int16_t setDataShaping(uint8_t dataShaping) override { return RADIOLIB_ERR_NONE; }
+        int16_t setEncoding(uint8_t encoding) override { return RADIOLIB_ERR_NONE; }
+        int16_t setSyncWord(const uint8_t* syncWord, size_t len) override { return RADIOLIB_ERR_NONE; }
+        int16_t setPreambleLength(size_t len) override { return RADIOLIB_ERR_NONE; }
+        int16_t setGain(uint8_t gain) override { return RADIOLIB_ERR_NONE; }
+        int16_t enableTestMode() override { return RADIOLIB_ERR_NONE; }
+        int16_t disableTestMode() override { return RADIOLIB_ERR_NONE; }
+        float getFrequencyError(bool update = true) override { return 0.0; }
+        int32_t random(uint32_t max) override { return 0; }
+        int16_t startDirect() override { return RADIOLIB_ERR_NONE; }
+        int16_t readRssiDirect() override { return RADIOLIB_ERR_NONE; }
+        int16_t launchMode() override { return RADIOLIB_ERR_NONE; }
+        uint8_t randomByte() override { return 0; }
+        int16_t setBitRate(float br) override { return RADIOLIB_ERR_NONE; }
         uint32_t getIrqFlags() override { return RADIOLIB_NO_IRQ; }
-        int16_t scanChannel(const ChannelScanConfig_t& config) { return RADIOLIB_ERR_NONE; }
-        int16_t scanChannel() { return RADIOLIB_ERR_NONE; }
-        int16_t setIrqFlags(uint32_t flags) { return RADIOLIB_ERR_NONE; }
+        int16_t scanChannel(const ChannelScanConfig_t& config) override { return RADIOLIB_ERR_NONE; }
+        int16_t scanChannel() override { return RADIOLIB_ERR_NONE; }
+        int16_t setIrqFlags(uint32_t flags) override { return RADIOLIB_ERR_NONE; }
         RadioLibTime_t getTimeOnAir(size_t len) override { return 0; }
-        int16_t checkDataRate(DataRate_t dr, ModemType_t modem = RADIOLIB_MODEM_NONE) { return RADIOLIB_ERR_NONE; }
-        int16_t clearIrqFlags(uint32_t flags) { return RADIOLIB_ERR_NONE; }
-        int16_t finishReceive() { return RADIOLIB_ERR_NONE; }
-        int16_t receiveDirect() { return RADIOLIB_ERR_NONE; }
-        int16_t setDIOMapping(uint32_t dioPin, uint32_t fnc) { return RADIOLIB_ERR_NONE; }
-        int16_t finishTransmit() { return RADIOLIB_ERR_NONE; }
+        int16_t checkDataRate(DataRate_t dr, ModemType_t modem = RADIOLIB_MODEM_NONE) override { return RADIOLIB_ERR_NONE; }
+        int16_t clearIrqFlags(uint32_t flags) override { return RADIOLIB_ERR_NONE; }
+        int16_t finishReceive() override { return RADIOLIB_ERR_NONE; }
+        int16_t receiveDirect() override { return RADIOLIB_ERR_NONE; }
+        int16_t setDIOMapping(uint32_t dioPin, uint32_t fnc) override { return RADIOLIB_ERR_NONE; }
+        int16_t finishTransmit() override { return RADIOLIB_ERR_NONE; }
         int16_t transmitDirect(uint32_t frf = 0) override { return RADIOLIB_ERR_NONE; }
         void setDirectAction(void (*func)()) override { /* no return needed */ }
-        int16_t checkOutputPower(int8_t power, int8_t* actualPower = nullptr) { return RADIOLIB_ERR_NONE; }
-        int16_t startChannelScan(const ChannelScanConfig_t& config) { return RADIOLIB_ERR_NONE; }
-        int16_t startChannelScan() { return RADIOLIB_ERR_NONE; }
+        int16_t checkOutputPower(int8_t power, int8_t* actualPower = nullptr) override { return RADIOLIB_ERR_NONE; }
+        int16_t startChannelScan(const ChannelScanConfig_t& config) override { return RADIOLIB_ERR_NONE; }
+        int16_t startChannelScan() override { return RADIOLIB_ERR_NONE; }
         RadioLibTime_t calculateRxTimeout(RadioLibTime_t timeoutUs) override { return 0; }
         RadioLibTime_t calculateTimeOnAir(ModemType_t modem, DataRate_t dr, PacketConfig_t pc, size_t len) override { return 0; }
         void setPacketSentAction(void (*func)()) override { /* no return needed */ }
         int16_t getChannelScanResult() override { return RADIOLIB_ERR_NONE; }
         void setChannelScanAction(void (*func)()) override { /* no return needed */ }
         void clearPacketSentAction() override { /* no return needed */ }
-        int16_t setFrequencyDeviation(float freqDev) { return RADIOLIB_ERR_NONE; }
+        int16_t setFrequencyDeviation(float freqDev) override { return RADIOLIB_ERR_NONE; }
         void clearChannelScanAction() override { /* no return needed */ }
         void setPacketReceivedAction(void (*func)()) override { /* no return needed */ }
         void clearPacketReceivedAction() override { /* no return needed */ }
         void readBit(uint32_t pin) override { /* no return needed */ }
         int16_t receive(uint8_t* data, size_t len, RadioLibTime_t timeout = 0) override { return RADIOLIB_ERR_NONE; }
-        int16_t standby(uint8_t mode = 0) { return RADIOLIB_ERR_NONE; }
+        int16_t standby(uint8_t mode = 0) override { return RADIOLIB_ERR_NONE; }
         int16_t getModem(ModemType_t* modem = nullptr) override { return RADIOLIB_ERR_NONE; }
-        int16_t invertIQ(bool invert) { return RADIOLIB_ERR_NONE; }
-        int16_t setModem(ModemType_t modem) { return RADIOLIB_ERR_NONE; }
-        int16_t transmit(const uint8_t* data, size_t len, uint8_t addr = 0) { return RADIOLIB_ERR_NONE; } // Another virtual transmit overload
-        int16_t stageMode(RadioModeType_t mode, RadioModeConfig_t* config = nullptr) { return RADIOLIB_ERR_NONE; }
+        int16_t invertIQ(bool invert) override { return RADIOLIB_ERR_NONE; }
+        int16_t setModem(ModemType_t modem) override { return RADIOLIB_ERR_NONE; }
+        int16_t transmit(const uint8_t* data, size_t len, uint8_t addr = 0) override { return RADIOLIB_ERR_NONE; } // Another virtual transmit overload
+        int16_t stageMode(RadioModeType_t mode, RadioModeConfig_t* config = nullptr) override { return RADIOLIB_ERR_NONE; }
 
         // Non-virtual overloads/methods that were incorrectly marked with 'override'
         // These are not part of the virtual interface of PhysicalLayer in its base form.
