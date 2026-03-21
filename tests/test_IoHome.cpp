@@ -288,6 +288,7 @@ int main() {
         // Mock methods with custom logic (called by IoHomeNode)
         int16_t setFrequency(float freq) override {
             actualFrequencySet = freq;
+            std::cout << "DEBUG: MockPhysicalLayer setFrequency called with: " << std::fixed << std::setprecision(5) << freq << std::endl;
             return RADIOLIB_ERR_NONE;
         }
 
