@@ -54,6 +54,15 @@ int main() {
     std::vector<uint8_t> data6 = {0xDE, 0xAD, 0xBE, 0xEF};
     uint16_t expected_crc6 = 0x51E5; // Corrected expected value for CRC-16/KERMIT (poly 0x1021, init 0x0000, no reflection, no xor out)
     uint16_t actual_crc6 = IoHomeNode::crc16(data6.data(), data6.size());
+    
+    // Debugging output for Hex DEAD BEEF test
+    if (actual_crc6 != expected_crc6) {
+        std::cout << "DEBUG: For 'Hex DEAD BEEF', expected CRC: 0x" 
+                  << std::hex << std::setw(4) << std::setfill('0') << expected_crc6
+                  << ", actual CRC: 0x" 
+                  << std::hex << std::setw(4) << std::setfill('0') << actual_crc6 << std::endl;
+    }
+    std::dec; // Reset to decimal for subsequent output
     runTest("Hex DEAD BEEF", actual_crc6 == expected_crc6);
 
     // Test case 7: Data length 10, all zeros
