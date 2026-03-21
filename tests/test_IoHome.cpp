@@ -88,6 +88,15 @@ int main() {
     std::vector<uint8_t> data10(str10.begin(), str10.end());
     uint16_t expected_crc10 = 0x3228; // Calculated with CRC-16/KERMIT
     uint16_t actual_crc10 = IoHomeNode::crc16(data10.data(), data10.size());
+
+    // Debugging output for Longer string test
+    if (actual_crc10 != expected_crc10) {
+        std::cout << "DEBUG: For 'Longer string', expected CRC: 0x"
+                  << std::hex << std::setw(4) << std::setfill('0') << expected_crc10
+                  << ", actual CRC: 0x"
+                  << std::hex << std::setw(4) << std::setfill('0') << actual_crc10 << std::endl;
+    }
+    std::cout << std::dec; // Reset to decimal for subsequent output
     runTest("Longer string 'The quick brown fox...'", actual_crc10 == expected_crc10);
 
 
