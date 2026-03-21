@@ -8,7 +8,19 @@
 #include "IoHome.h"
 #include <RadioLib.h> // Explicitly include for RadioLib error codes
 
-// Moved PhysicalLayer base class definitions to src/IoHome.cpp to ensure vtable is emitted in a linked compilation unit.
+// Provide a default constructor for PhysicalLayer for the test environment.
+// This is a workaround for linker errors when the full RadioLib library is not linked.
+#if !defined(ARDUINO)
+PhysicalLayer::PhysicalLayer() {}
+
+// Define a minimal implementation for a non-pure virtual function from PhysicalLayer
+// to ensure the vtable and typeinfo are emitted for the test environment.
+// This is required when not linking the full RadioLib library.
+int16_t PhysicalLayer::standby(uint8_t mode) {
+    (void)mode; // Suppress unused parameter warning
+    return RADIOLIB_ERR_NONE; // Simulate success
+}
+#endif // !defined(ARDUINO)
 
 // Define missing RadioLib constants for testing environment if not pulled in
 #ifndef RADIOLIB_NO_IRQ
