@@ -165,7 +165,7 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   for (size_t i = 0; i < frame.size(); ++i) {
     Serial.printf("%02X ", frame[i]);
   }
-  Serial.println();
+  Serial.println(""); // Use empty string for new line
 #endif
 
   return frame;
@@ -182,7 +182,7 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     for (size_t i = 0; i < frameLength; ++i) {
         Serial.printf("%02X ", frame[i]);
     }
-    Serial.println();
+    Serial.println(""); // Use empty string for new line
 #endif
 
     // 1. Basic length check: must be at least header + cmd_id + CRC
@@ -255,7 +255,7 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
         for (size_t i = 0; i < parsedFrame.payload.size(); ++i) {
             Serial.printf("%02X ", parsedFrame.payload[i]);
         }
-        Serial.println();
+        Serial.println(""); // Use empty string for new line
 #endif
     } else {
 #ifdef DEBUG_IOHOME
@@ -289,7 +289,7 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
     for (size_t i = 0; i < frame.size(); ++i) {
         Serial.printf("%02X ", frame[i]);
     }
-    Serial.println();
+    Serial.println(""); // Use empty string for new line
 #endif
     // Transmit the frame
     state = this->phyLayer->startTransmit(frame.data(), frame.size());

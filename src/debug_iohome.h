@@ -14,9 +14,20 @@
             std::vprintf(format, args);
             va_end(args);
         }
-        // Add other Serial methods (e.g., print, println) here if they are used
+
+        // Basic println for string literals or values
+        void println(const char* msg = "") {
+            printf("%s\n", msg);
+        }
+
+        // Overload for Serial.println() with integer/long, etc.
+        template<typename T>
+        void println(T value) {
+            printf("%lld\n", (long long)value); // Cast to long long for generic integral printing
+        }
+
+        // Add other Serial methods (e.g., print) here if they are used
         // within #ifdef DEBUG_IOHOME blocks in non-Arduino files.
-        // For the current IoHome.cpp, only Serial.printf is used in such blocks.
     };
     extern MockSerialClass Serial; // Declare a global mock Serial object
   #endif
