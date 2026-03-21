@@ -26,7 +26,7 @@
 #define IOHOME_CTRLBYTE0_POS                (0x0)
 #define IOHOME_CTRLBYTE1_POS                (0x1)
 #define IOHOME_MAC_SOURCE_POS               (0x2)
-#define IOHOME_MAC_DEST_POS                 (0x3)
+#define IOHOME_MAC_DEST_POS                 (IOHOME_MAC_SOURCE_POS + IOHOME_FRAME_MAC_LEN) // Corrected position: after source MAC
 #define IOHOME_MSG_LEN(MSG)                 ((MSG[IOHOME_CTRLBYTE0_POS] & 0x1F) + 1) // +1 for the control byte itself
 #define IOHOME_FRAME_CRC_LEN                (2) // CRC-16 is 2 bytes long
 #define IOHOME_FRAME_CRC_POS(FRAME_LEN)     ((FRAME_LEN) - IOHOME_FRAME_CRC_LEN)

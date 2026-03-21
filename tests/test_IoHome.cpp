@@ -163,14 +163,6 @@ int main() {
     runTest("buildFrame (no payload) - CTRL1", frame_no_payload[IOHOME_CTRLBYTE1_POS] == test_ctrl1);
     runTest("buildFrame (no payload) - SRC_MAC[0]", frame_no_payload[IOHOME_MAC_SOURCE_POS] == test_src_mac.n0);
     
-    // Debugging output for DEST_MAC[0] test
-    if (frame_no_payload[IOHOME_MAC_DEST_POS] != test_dest_mac.n0) {
-        std::cout << "DEBUG: For 'buildFrame (no payload) - DEST_MAC[0]', expected: 0x"
-                  << std::hex << std::setw(2) << std::setfill('0') << (int)test_dest_mac.n0
-                  << ", actual: 0x"
-                  << std::hex << std::setw(2) << std::setfill('0') << (int)frame_no_payload[IOHOME_MAC_DEST_POS] << std::endl;
-    }
-    std::cout << std::dec; // Reset to decimal for subsequent output
     runTest("buildFrame (no payload) - DEST_MAC[0]", frame_no_payload[IOHOME_MAC_DEST_POS] == test_dest_mac.n0);
     runTest("buildFrame (no payload) - CMD_ID", frame_no_payload[IOHOME_FRAME_HEADER_LEN] == test_cmd_id);
 
