@@ -3,26 +3,8 @@
 #include "TypeDef.h"
 #include "protocols/PhysicalLayer/PhysicalLayer.h"
 #include "debug_iohome.h" // For conditional Serial.printf
-#if !defined(ARDUINO) && defined(DEBUG_IOHOME)
-// Define the global mock Serial object for non-Arduino debug builds
-// This definition must be in a single compilation unit.
-MockSerialClass Serial;
-#endif
-
-// Provide a default constructor for PhysicalLayer for the test environment.
-// This is a workaround for the linker error "Undefined symbols for architecture x86_64: "PhysicalLayer::PhysicalLayer()""
-// when not linking the full RadioLib library during unit testing.
-#if !defined(ARDUINO)
-PhysicalLayer::PhysicalLayer() {}
-
-// Define a minimal implementation for a non-pure virtual function from PhysicalLayer
-// to ensure the vtable and typeinfo are emitted for the test environment.
-// This is required when not linking the full RadioLib library.
-int16_t PhysicalLayer::standby(uint8_t mode) {
-    (void)mode; // Suppress unused parameter warning
-    return RADIOLIB_ERR_NONE; // Simulate success
-}
-#endif // !defined(ARDUINO)
+// Mock Serial object and PhysicalLayer base class definitions
+// were moved to tests/test_IoHome.cpp to ensure vtable is emitted in the correct compilation unit for the test build.
 
 IoHomeNode::IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel_param)
   : phyLayer(phy), channel(channel_param) {
