@@ -330,7 +330,7 @@ int main() {
         int16_t readData(std::string& str, size_t len, size_t offset) { return RADIOLIB_ERR_NONE; }
         float getSNR() { return 0.0; }
         float getRSSI() { return 0.0; } // Pure virtual version (no params)
-        size_t getPacketLength() const { return mockPacketLength; }
+        size_t getPacketLength() const override { return mockPacketLength; }
         int16_t fixedPacketLengthMode(size_t len) { return RADIOLIB_ERR_NONE; }
         int16_t variablePacketLengthMode() { return RADIOLIB_ERR_NONE; }
         int16_t standby() { return RADIOLIB_ERR_NONE; }
@@ -352,36 +352,36 @@ int main() {
         int16_t launchMode() { return RADIOLIB_ERR_NONE; }
         uint8_t randomByte() { return 0; }
         int16_t setBitRate(float br) { return RADIOLIB_ERR_NONE; }
-        RadioLibIrqFlags_t getIrqFlags() { return RADIOLIB_NO_IRQ; }
+        uint32_t getIrqFlags() override { return RADIOLIB_NO_IRQ; }
         int16_t scanChannel(const ChannelScanConfig_t& config) { return RADIOLIB_ERR_NONE; }
         int16_t scanChannel() { return RADIOLIB_ERR_NONE; }
         int16_t setIrqFlags(uint32_t flags) { return RADIOLIB_ERR_NONE; }
-        unsigned long getTimeOnAir(unsigned long len) { return 0; }
+        RadioLibTime_t getTimeOnAir(size_t len) override { return 0; }
         int16_t checkDataRate(DataRate_t dr, ModemType_t modem = RADIOLIB_MODEM_NONE) { return RADIOLIB_ERR_NONE; }
         int16_t clearIrqFlags(uint32_t flags) { return RADIOLIB_ERR_NONE; }
         int16_t finishReceive() { return RADIOLIB_ERR_NONE; }
         int16_t receiveDirect() { return RADIOLIB_ERR_NONE; }
         int16_t setDIOMapping(uint32_t dioPin, uint32_t fnc) { return RADIOLIB_ERR_NONE; }
         int16_t finishTransmit() { return RADIOLIB_ERR_NONE; }
-        int16_t transmitDirect(uint32_t pin) { return RADIOLIB_ERR_NONE; }
-        int16_t setDirectAction(void (*func)()) { return RADIOLIB_ERR_NONE; }
+        int16_t transmitDirect(uint32_t frf = 0) override { return RADIOLIB_ERR_NONE; }
+        void setDirectAction(void (*func)()) override { /* no return needed */ }
         int16_t checkOutputPower(int8_t power, int8_t* actualPower = nullptr) { return RADIOLIB_ERR_NONE; }
         int16_t startChannelScan(const ChannelScanConfig_t& config) { return RADIOLIB_ERR_NONE; }
         int16_t startChannelScan() { return RADIOLIB_ERR_NONE; }
-        unsigned long calculateRxTimeout(unsigned long len) { return 0; }
-        unsigned long calculateTimeOnAir(ModemType_t modem, DataRate_t dr, PacketConfig_t pc, unsigned long len) { return 0; }
-        int16_t setPacketSentAction(void (*func)()) { return RADIOLIB_ERR_NONE; }
-        ChannelScanResult_t getChannelScanResult() { return {}; }
-        int16_t setChannelScanAction(void (*func)()) { return RADIOLIB_ERR_NONE; }
-        int16_t clearPacketSentAction() { return RADIOLIB_ERR_NONE; }
+        RadioLibTime_t calculateRxTimeout(RadioLibTime_t timeoutUs) override { return 0; }
+        RadioLibTime_t calculateTimeOnAir(ModemType_t modem, DataRate_t dr, PacketConfig_t pc, size_t len) override { return 0; }
+        void setPacketSentAction(void (*func)()) override { /* no return needed */ }
+        int16_t getChannelScanResult() override { return RADIOLIB_ERR_NONE; }
+        void setChannelScanAction(void (*func)()) override { /* no return needed */ }
+        void clearPacketSentAction() override { /* no return needed */ }
         int16_t setFrequencyDeviation(float freqDev) { return RADIOLIB_ERR_NONE; }
-        int16_t clearChannelScanAction() { return RADIOLIB_ERR_NONE; }
-        int16_t setPacketReceivedAction(void (*func)()) { return RADIOLIB_ERR_NONE; }
-        int16_t clearPacketReceivedAction() { return RADIOLIB_ERR_NONE; }
-        int16_t readBit(uint32_t pin) { return 0; }
-        int16_t receive(uint8_t* data, size_t len, size_t offset = 0) { return RADIOLIB_ERR_NONE; }
+        void clearChannelScanAction() override { /* no return needed */ }
+        void setPacketReceivedAction(void (*func)()) override { /* no return needed */ }
+        void clearPacketReceivedAction() override { /* no return needed */ }
+        void readBit(uint32_t pin) override { /* no return needed */ }
+        int16_t receive(uint8_t* data, size_t len, RadioLibTime_t timeout = 0) override { return RADIOLIB_ERR_NONE; }
         int16_t standby(uint8_t mode = 0) { return RADIOLIB_ERR_NONE; }
-        ModemType_t getModem(ModemType_t* modem = nullptr) { return RADIOLIB_MODEM_NONE; }
+        int16_t getModem(ModemType_t* modem = nullptr) override { return RADIOLIB_ERR_NONE; }
         int16_t invertIQ(bool invert) { return RADIOLIB_ERR_NONE; }
         int16_t setModem(ModemType_t modem) { return RADIOLIB_ERR_NONE; }
         int16_t transmit(const uint8_t* data, size_t len, uint8_t addr = 0) { return RADIOLIB_ERR_NONE; } // Another virtual transmit overload
