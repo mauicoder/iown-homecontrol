@@ -69,6 +69,29 @@ uint16_t IoHomeNode::crc16(const uint8_t* data, size_t length) {
   return crc;
 }
 
+bool IoHomeNode::validateFrameCrc(const uint8_t* frame, size_t frameLength) {
+#ifdef DEBUG_IOHOME
+  Serial.printf("[IoHomeNode::validateFrameCrc] Validating CRC for frame of length: %u\n", frameLength);
+#endif
+  if (frameLength < IOHOME_FRAME_CRC_LEN) {
+#ifdef DEBUG_IOHOME
+    Serial.printf("[IoHomeNode::validateFrameCrc] Frame too short (len %u) to contain CRC (min %u).\n", frameLength, IOHOME_FRAME_CRC_LEN);
+#endif
+    return false; // Frame too short to even contain a CRC
+  }
+
+  // Calculate CRC over the data portion (excluding the 2 CRC bytes at the end)
+  uint16_t calculatedCrc = IoHomeNode::crc16(frame, IOHOME_FRAME_CRC_POS(frameLength));
+
+  // Extract the received CRC from the end of the frame
+  uint16_t receivedCrc = IoHomeNode::ntoh<uint16_t>((uint8_t*)frame + IOHOME_FRAME_CRC_POS(frameLength));
+
+#ifdef DEBUG_IOHOME
+  Serial.printf("[IoHomeNode::validateFrameCrc] Calculated CRC: 0x%04X, Received CRC: 0x%04X\n", calculatedCrc, receivedCrc);
+#endif
+  return calculatedCrc == receivedCrc;
+}
+
 std::vector<uint8_t> IoHomeNode::buildFrame(
   uint8_t ctrlByte0,
   uint8_t ctrlByte1,
