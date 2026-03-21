@@ -407,7 +407,12 @@ int main() {
     mockPhy.startTransmitResult = RADIOLIB_ERR_NONE; // Simulate success
     int16_t tx_result_success = ioHomeNode_tx_test.transmitFrame(frame_to_transmit);
     runTest("transmitFrame (success) - return code", tx_result_success == RADIOLIB_ERR_NONE);
-    runTest("transmitFrame (success) - frequency set", mockPhy.actualFrequencySet == (test_channel.c0 + test_channel.c1 / 100.0));
+    float expected_freq = (test_channel.c0 + test_channel.c1 / 100.0);
+    if (mockPhy.actualFrequencySet != expected_freq) {
+        std::cout << "DEBUG: Expected frequency: " << std::fixed << std::setprecision(2) << expected_freq
+                  << ", Actual frequency set: " << std::fixed << std::setprecision(2) << mockPhy.actualFrequencySet << std::endl;
+    }
+    runTest("transmitFrame (success) - frequency set", mockPhy.actualFrequencySet == expected_freq);
 
     // Test case 25: Transmit a frame (simulated failure)
     mockPhy.startTransmitResult = RADIOLIB_ERR_TX_TIMEOUT; // Simulate failure
