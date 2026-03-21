@@ -177,3 +177,30 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
     return state;
 }
 
+int16_t IoHomeNode::receiveFrame(IoHomeFrame_t& receivedFrame) {
+    // Set frequency according to the current channel
+    int16_t state = this->phyLayer->setFrequency(this->channel->c0 + (this->channel->c1 / 100.0));
+    RADIOLIB_ASSERT(state);
+
+    // Start receiving
+    state = this->phyLayer->startReceive();
+    RADIOLIB_ASSERT(state);
+
+    // Wait for a packet
+    size_t packetLength = this->phyLayer->getPacketLength();
+    if (packetLength == 0) {
+        return RADIOLIB_ERR_RX_TIMEOUT; // Or some other appropriate error for no packet received
+    }
+
+    std::vector<uint8_t> rxBuffer(packetLength);
+    state = this->phyLayer->readData(rxBuffer.data(), packetLength);
+    RADIOLIB_ASSERT(state);
+
+    // Parse the received frame
+    if (!IoHomeNode::parseFrame(rxBuffer.data(), rxBuffer.size(), receivedFrame)) {
+        return RADIOLIB_ERR_CRC_MISMATCH; // Or a custom error for parsing failure
+    }
+
+    return RADIOLIB_ERR_NONE;
+}
+

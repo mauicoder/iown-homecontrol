@@ -197,6 +197,13 @@ class IoHomeNode {
       \returns RadioLib status code (0 on success, non-zero on error).
     */
     int16_t transmitFrame(const std::vector<uint8_t>& frame);
+
+    /*!
+      \brief Receives an io-homecontrol frame from the physical layer and parses it.
+      \param receivedFrame Reference to an IoHomeFrame_t struct to populate with received and parsed data.
+      \returns RadioLib status code (0 on success, non-zero on error).
+    */
+    int16_t receiveFrame(IoHomeFrame_t& receivedFrame);
 };
 
 #endif

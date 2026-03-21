@@ -265,51 +265,72 @@ int main() {
 
     std::cout << "All IoHomeNode Frame Parsing tests completed." << std::endl;
 
-    // --- Mock PhysicalLayer for transmit tests ---
+    // --- Mock PhysicalLayer for transmit/receive tests ---
     class MockPhysicalLayer : public PhysicalLayer {
     public:
         int16_t startTransmitResult = RADIOLIB_ERR_NONE;
-        float setFrequencyValue = 0.0;
+        int16_t startReceiveResult = RADIOLIB_ERR_NONE;
+        int16_t readDataResult = RADIOLIB_ERR_NONE;
         float actualFrequencySet = 0.0;
+        std::vector<uint8_t> rxBufferInternal;
+        size_t mockPacketLength = 0; // Length reported by getPacketLength
 
-        // Mock methods needed by IoHomeNode::transmitFrame
+        // Mock methods called by IoHomeNode
         int16_t setFrequency(float freq) override {
             actualFrequencySet = freq;
-            return RADIOLIB_ERR_NONE; // Always succeed setting frequency in mock
+            return RADIOLIB_ERR_NONE;
         }
+
         int16_t startTransmit(const uint8_t* data, size_t len) override {
-            // In a real mock, you might store `data` and `len` to inspect them later
-            // For now, just return the predefined result
+            // Can store data here for verification if needed
             return startTransmitResult;
         }
 
-        // Dummy implementations for other pure virtual methods from PhysicalLayer
-        // These are not directly used by IoHomeNode::transmitFrame but are required by the abstract base class
+        int16_t startReceive() override {
+            return startReceiveResult;
+        }
+
+        size_t getPacketLength(bool update = true) override {
+            return mockPacketLength;
+        }
+        
+        // This is the readData signature used by IoHomeNode::receiveFrame
+        int16_t readData(uint8_t* data, size_t len) override {
+            if (readDataResult != RADIOLIB_ERR_NONE) {
+                return readDataResult;
+            }
+            if (len > rxBufferInternal.size()) {
+                // Return an error if trying to read more than available in mock buffer
+                return RADIOLIB_ERR_RX_TIMEOUT; 
+            }
+            std::copy(rxBufferInternal.begin(), rxBufferInternal.begin() + len, data);
+            return RADIOLIB_ERR_NONE;
+        }
+
+        // Minimal dummy implementations for other pure virtual methods required to make MockPhysicalLayer concrete.
+        // Only mark with 'override' if the base class method is truly virtual and matches the signature.
         int16_t begin(float freq, float bw, uint8_t sf, uint8_t cr, uint8_t syncWord, int8_t pwr, uint16_t preamble, float tcxoVoltage, bool use, float tempCoeff) override { return RADIOLIB_ERR_NONE; }
         int16_t beginFSK(float freq, float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, int8_t pwr, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; }
         int16_t end() override { return RADIOLIB_ERR_NONE; }
         int16_t setOutputPower(int8_t power) override { return RADIOLIB_ERR_NONE; }
-        int16_t readData(uint8_t* data, size_t len) override { return RADIOLIB_ERR_NONE; }
         int16_t configFSK(float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; }
-        int16_t startReceive(uint32_t timeout = 0, uint32_t channel = 0) override { return RADIOLIB_ERR_NONE; }
+        int16_t startReceive(uint32_t timeout, uint32_t channel) override { return RADIOLIB_ERR_NONE; } // Specific overload
         int16_t readData(uint8_t* data, size_t len, size_t offset) override { return RADIOLIB_ERR_NONE; }
         int16_t readData(std::string& str) override { return RADIOLIB_ERR_NONE; }
         int16_t readData(std::string& str, size_t len) override { return RADIOLIB_ERR_NONE; }
         int16_t readData(std::string& str, size_t len, size_t offset) override { return RADIOLIB_ERR_NONE; }
-        int16_t startReceive(void) override { return RADIOLIB_ERR_NONE; }
-        int16_t startTransmit(const std::string& str, uint32_t timeout = 0, uint32_t channel = 0) override { return RADIOLIB_ERR_NONE; }
+        int16_t startTransmit(const std::string& str, uint32_t timeout, uint32_t channel) override { return RADIOLIB_ERR_NONE; }
         int16_t startTransmit(const std::string& str) override { return RADIOLIB_ERR_NONE; }
         float getSNR() override { return 0.0; }
         float getRSSI(bool actual = false) override { return 0.0; }
-        size_t getPacketLength(bool update = true) override { return 0; }
-        size_t getPacketLength() const override { return 0; }
+        size_t getPacketLength() const override { return 0; } // const version
         int16_t fixedPacketLengthMode(size_t len) override { return RADIOLIB_ERR_NONE; }
         int16_t variablePacketLengthMode() override { return RADIOLIB_ERR_NONE; }
         int16_t standby() override { return RADIOLIB_ERR_NONE; }
         int16_t sleep() override { return RADIOLIB_ERR_NONE; }
         int16_t setDioAction(uint32_t pin, uint32_t fnc) override { return RADIOLIB_ERR_NONE; }
         int16_t clearDioAction(uint32_t pin) override { return RADIOLIB_ERR_NONE; }
-        int16_t setDataRate(DataRate_t dataRate) override { return RADIOLIB_ERR_NONE; }
+        int16_t setDataRate(DataRate_t dr, ModemType_t modem = RADIOLIB_MODEM_NONE) override { return RADIOLIB_ERR_NONE; } // Correct signature
         int16_t setDataShaping(uint8_t dataShaping) override { return RADIOLIB_ERR_NONE; }
         int16_t setEncoding(uint8_t encoding) override { return RADIOLIB_ERR_NONE; }
         int16_t setSyncWord(uint8_t* syncWord, size_t len) override { return RADIOLIB_ERR_NONE; }
@@ -321,6 +342,7 @@ int main() {
         int32_t random(uint32_t max) override { return 0; }
         int16_t startDirect() override { return RADIOLIB_ERR_NONE; }
         int16_t readRssiDirect() override { return RADIOLIB_ERR_NONE; }
+
     };
 
     std::cout << "\nStarting IoHomeNode Transmit tests..." << std::endl;
@@ -347,6 +369,87 @@ int main() {
 
 
     std::cout << "All IoHomeNode Transmit tests completed." << std::endl;
+
+    std::cout << "\nStarting IoHomeNode Receive tests..." << std::endl;
+
+    // Test case 26: Receive a valid frame successfully
+    std::vector<uint8_t> valid_rx_payload = {0xDE, 0xAD, 0xBE, 0xEF};
+    std::vector<uint8_t> valid_rx_frame = IoHomeNode::buildFrame(
+        test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, valid_rx_payload
+    );
+    mockPhy.rxBufferInternal = valid_rx_frame;
+    mockPhy.mockPacketLength = valid_rx_frame.size();
+    mockPhy.startReceiveResult = RADIOLIB_ERR_NONE; // Simulate radio successfully entering RX mode
+    mockPhy.readDataResult = RADIOLIB_ERR_NONE;     // Simulate successful read
+
+    IoHomeFrame_t receivedFrame1;
+    int16_t rx_result_success = ioHomeNode_tx_test.receiveFrame(receivedFrame1); // ioHomeNode_tx_test shares same mockPhy and channel
+    runTest("receiveFrame (success) - return code", rx_result_success == RADIOLIB_ERR_NONE);
+    runTest("receiveFrame (success) - frame valid", receivedFrame1.isValid);
+    runTest("receiveFrame (success) - CTRL0", receivedFrame1.ctrlByte0 == valid_rx_frame[IOHOME_CTRLBYTE0_POS]);
+    runTest("receiveFrame (success) - Payload", receivedFrame1.payload == valid_rx_payload);
+    runTest("receiveFrame (success) - frequency set", mockPhy.actualFrequencySet == (test_channel.c0 + test_channel.c1 / 100.0));
+
+    // Test case 27: Receive frame, but CRC is corrupted (parseFrame fails)
+    std::vector<uint8_t> corrupted_rx_frame = valid_rx_frame;
+    corrupted_rx_frame[corrupted_rx_frame.size() - 1] ^= 0x01; // Corrupt last byte of CRC
+    mockPhy.rxBufferInternal = corrupted_rx_frame;
+    mockPhy.mockPacketLength = corrupted_rx_frame.size();
+    mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
+    mockPhy.readDataResult = RADIOLIB_ERR_NONE;
+
+    IoHomeFrame_t receivedFrame2;
+    int16_t rx_result_corrupted_crc = ioHomeNode_tx_test.receiveFrame(receivedFrame2);
+    runTest("receiveFrame (corrupted CRC) - return code", rx_result_corrupted_crc == RADIOLIB_ERR_CRC_MISMATCH);
+    runTest("receiveFrame (corrupted CRC) - frame invalid", !receivedFrame2.isValid);
+
+    // Test case 28: Radio fails to start receive mode
+    mockPhy.startReceiveResult = RADIOLIB_ERR_RX_TIMEOUT; // Simulate radio error
+    mockPhy.rxBufferInternal.clear(); // No data to receive
+    mockPhy.mockPacketLength = 0;
+    mockPhy.readDataResult = RADIOLIB_ERR_NONE;
+
+    IoHomeFrame_t receivedFrame3;
+    int16_t rx_result_radio_fail = ioHomeNode_tx_test.receiveFrame(receivedFrame3);
+    runTest("receiveFrame (radio fail) - return code", rx_result_radio_fail == RADIOLIB_ERR_RX_TIMEOUT);
+    runTest("receiveFrame (radio fail) - frame invalid", !receivedFrame3.isValid);
+
+    // Test case 29: Radio receives no packet (getPacketLength returns 0)
+    mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
+    mockPhy.rxBufferInternal.clear();
+    mockPhy.mockPacketLength = 0; // Simulate no packet received
+    mockPhy.readDataResult = RADIOLIB_ERR_NONE;
+
+    IoHomeFrame_t receivedFrame4;
+    int16_t rx_result_no_packet = ioHomeNode_tx_test.receiveFrame(receivedFrame4);
+    runTest("receiveFrame (no packet) - return code", rx_result_no_packet == RADIOLIB_ERR_RX_TIMEOUT);
+    runTest("receiveFrame (no packet) - frame invalid", !receivedFrame4.isValid);
+
+    // Test case 30: ReadData fails after packet detected
+    mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
+    mockPhy.rxBufferInternal = valid_rx_frame;
+    mockPhy.mockPacketLength = valid_rx_frame.size();
+    mockPhy.readDataResult = RADIOLIB_ERR_SPI_READ_FAILED; // Simulate SPI read failure
+
+    IoHomeFrame_t receivedFrame5;
+    int16_t rx_result_read_fail = ioHomeNode_tx_test.receiveFrame(receivedFrame5);
+    runTest("receiveFrame (read data fail) - return code", rx_result_read_fail == RADIOLIB_ERR_SPI_READ_FAILED);
+    runTest("receiveFrame (read data fail) - frame invalid", !receivedFrame5.isValid);
+
+    // Test case 31: Frame too short to be parsed as io-homecontrol (implicitly handled by parseFrame)
+    std::vector<uint8_t> short_rx_frame = {0x01, 0x02}; // Much shorter than min frame len
+    mockPhy.rxBufferInternal = short_rx_frame;
+    mockPhy.mockPacketLength = short_rx_frame.size();
+    mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
+    mockPhy.readDataResult = RADIOLIB_ERR_NONE;
+
+    IoHomeFrame_t receivedFrame6;
+    int16_t rx_result_too_short = ioHomeNode_tx_test.receiveFrame(receivedFrame6);
+    runTest("receiveFrame (too short) - return code", rx_result_too_short == RADIOLIB_ERR_CRC_MISMATCH); // parseFrame returns false, which is mapped to CRC_MISMATCH
+    runTest("receiveFrame (too short) - frame invalid", !receivedFrame6.isValid);
+
+
+    std::cout << "All IoHomeNode Receive tests completed." << std::endl;
 
     return 0;
 }
