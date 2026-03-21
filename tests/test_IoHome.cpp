@@ -15,7 +15,16 @@
 #if !defined(ARDUINO)
 PhysicalLayer::PhysicalLayer() {}
 // PhysicalLayer::~PhysicalLayer() {} // Removed: This was causing "definition of explicitly defaulted destructor" error
-#endif
+
+// Define a minimal implementation for a non-pure virtual function from PhysicalLayer
+// to ensure the vtable and typeinfo are emitted for the test environment.
+// This is required when not linking the full RadioLib library.
+int16_t PhysicalLayer::standby(uint8_t mode) {
+    (void)mode; // Suppress unused parameter warning
+    return RADIOLIB_ERR_NONE; // Simulate success
+}
+
+#endif // !defined(ARDUINO)
 
 // Define missing RadioLib constants for testing environment if not pulled in
 #ifndef RADIOLIB_NO_IRQ
