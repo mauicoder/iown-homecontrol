@@ -190,6 +190,13 @@ class IoHomeNode {
       \returns True if the frame was successfully parsed and its CRC is valid, false otherwise.
     */
     static bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
+
+    /*!
+      \brief Transmits a complete io-homecontrol frame over the physical layer.
+      \param frame The complete io-homecontrol frame to transmit.
+      \returns RadioLib status code (0 on success, non-zero on error).
+    */
+    int16_t transmitFrame(const std::vector<uint8_t>& frame);
 };
 
 #endif

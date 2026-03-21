@@ -167,3 +167,13 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     return true; // Parsing successful and CRC valid
 }
 
+int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
+    // Set frequency according to the current channel
+    int16_t state = this->phyLayer->setFrequency(this->channel->c0 + (this->channel->c1 / 100.0));
+    RADIOLIB_ASSERT(state);
+
+    // Transmit the frame
+    state = this->phyLayer->startTransmit(frame.data(), frame.size());
+    return state;
+}
+

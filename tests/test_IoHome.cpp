@@ -265,5 +265,88 @@ int main() {
 
     std::cout << "All IoHomeNode Frame Parsing tests completed." << std::endl;
 
+    // --- Mock PhysicalLayer for transmit tests ---
+    class MockPhysicalLayer : public PhysicalLayer {
+    public:
+        int16_t startTransmitResult = RADIOLIB_ERR_NONE;
+        float setFrequencyValue = 0.0;
+        float actualFrequencySet = 0.0;
+
+        // Mock methods needed by IoHomeNode::transmitFrame
+        int16_t setFrequency(float freq) override {
+            actualFrequencySet = freq;
+            return RADIOLIB_ERR_NONE; // Always succeed setting frequency in mock
+        }
+        int16_t startTransmit(const uint8_t* data, size_t len) override {
+            // In a real mock, you might store `data` and `len` to inspect them later
+            // For now, just return the predefined result
+            return startTransmitResult;
+        }
+
+        // Dummy implementations for other pure virtual methods from PhysicalLayer
+        // These are not directly used by IoHomeNode::transmitFrame but are required by the abstract base class
+        int16_t begin(float freq, float bw, uint8_t sf, uint8_t cr, uint8_t syncWord, int8_t pwr, uint16_t preamble, float tcxoVoltage, bool use and float tempCoeff) override { return RADIOLIB_ERR_NONE; }
+        int16_t beginFSK(float freq, float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, int8_t pwr, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; }
+        int16_t end() override { return RADIOLIB_ERR_NONE; }
+        int16_t setOutputPower(int8_t power) override { return RADIOLIB_ERR_NONE; }
+        int16_t readData(uint8_t* data, size_t len) override { return RADIOLIB_ERR_NONE; }
+        int16_t configFSK(float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; }
+        int16_t startReceive(uint32_t timeout = 0, uint32_t channel = 0) override { return RADIOLIB_ERR_NONE; }
+        int16_t readData(uint8_t* data, size_t len, size_t offset) override { return RADIOLIB_ERR_NONE; }
+        int16_t readData(std::string& str) override { return RADIOLIB_ERR_NONE; }
+        int16_t readData(std::string& str, size_t len) override { return RADIOLIB_ERR_NONE; }
+        int16_t readData(std::string& str, size_t len, size_t offset) override { return RADIOLIB_ERR_NONE; }
+        int16_t startReceive(void) override { return RADIOLIB_ERR_NONE; }
+        int16_t startTransmit(const std::string& str, uint32_t timeout = 0, uint32_t channel = 0) override { return RADIOLIB_ERR_NONE; }
+        int16_t startTransmit(const std::string& str) override { return RADIOLIB_ERR_NONE; }
+        float getSNR() override { return 0.0; }
+        float getRSSI(bool actual = false) override { return 0.0; }
+        size_t getPacketLength(bool update = true) override { return 0; }
+        size_t getPacketLength() const override { return 0; }
+        int16_t fixedPacketLengthMode(size_t len) override { return RADIOLIB_ERR_NONE; }
+        int16_t variablePacketLengthMode() override { return RADIOLIB_ERR_NONE; }
+        int16_t standby() override { return RADIOLIB_ERR_NONE; }
+        int16_t sleep() override { return RADIOLIB_ERR_NONE; }
+        int16_t setDioAction(uint32_t pin, uint32_t fnc) override { return RADIOLIB_ERR_NONE; }
+        int16_t clearDioAction(uint32_t pin) override { return RADIOLIB_ERR_NONE; }
+        int16_t setDataRate(DataRate_t dataRate) override { return RADIOLIB_ERR_NONE; }
+        int16_t setDataShaping(uint8_t dataShaping) override { return RADIOLIB_ERR_NONE; }
+        int16_t setEncoding(uint8_t encoding) override { return RADIOLIB_ERR_NONE; }
+        int16_t setSyncWord(uint8_t* syncWord, size_t len) override { return RADIOLIB_ERR_NONE; }
+        int16_t setPreambleLength(size_t len) override { return RADIOLIB_ERR_NONE; }
+        int16_t setGain(uint8_t gain) override { return RADIOLIB_ERR_NONE; }
+        int16_t enableTestMode() override { return RADIOLIB_ERR_NONE; }
+        int16_t disableTestMode() override { return RADIOLIB_ERR_NONE; }
+        float getFrequencyError(bool update = true) override { return 0.0; }
+        int32_t random(uint32_t max) override { return 0; }
+        int16_t startDirect() override { return RADIOLIB_ERR_NONE; }
+        int16_t readRssiDirect() override { return RADIOLIB_ERR_NONE; }
+    };
+
+    std::cout << "\nStarting IoHomeNode Transmit tests..." << std::endl;
+
+    MockPhysicalLayer mockPhy;
+    IoHomeChannel_t test_channel = {868, 95}; // e.g., 868.95 MHz
+    IoHomeNode ioHomeNode_tx_test(&mockPhy, &test_channel);
+
+    // Test case 24: Transmit a valid frame (successful scenario)
+    std::vector<uint8_t> frame_to_transmit = IoHomeNode::buildFrame(
+      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, no_payload_vec
+    );
+    mockPhy.startTransmitResult = RADIOLIB_ERR_NONE; // Simulate success
+    int16_t tx_result_success = ioHomeNode_tx_test.transmitFrame(frame_to_transmit);
+    runTest("transmitFrame (success) - return code", tx_result_success == RADIOLIB_ERR_NONE);
+    runTest("transmitFrame (success) - frequency set", mockPhy.actualFrequencySet == (test_channel.c0 + test_channel.c1 / 100.0));
+
+    // Test case 25: Transmit a frame (simulated failure)
+    mockPhy.startTransmitResult = RADIOLIB_ERR_TX_TIMEOUT; // Simulate failure
+    int16_t tx_result_failure = ioHomeNode_tx_test.transmitFrame(frame_to_transmit);
+    runTest("transmitFrame (failure) - return code", tx_result_failure == RADIOLIB_ERR_TX_TIMEOUT);
+    // Frequency should still be set correctly even if transmit fails
+    runTest("transmitFrame (failure) - frequency set", mockPhy.actualFrequencySet == (test_channel.c0 + test_channel.c1 / 100.0));
+
+
+    std::cout << "All IoHomeNode Transmit tests completed." << std::endl;
+
     return 0;
 }
