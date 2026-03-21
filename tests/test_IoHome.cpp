@@ -34,13 +34,13 @@ int main() {
 
     // Test case 3: Single byte 0x01
     std::vector<uint8_t> data3 = {0x01};
-    uint16_t expected_crc3 = 0x1021;
+    uint16_t expected_crc3 = 0x1189; // Corrected expected value for CRC-16/KERMIT
     uint16_t actual_crc3 = IoHomeNode::crc16(data3.data(), data3.size());
     runTest("Single byte 0x01", actual_crc3 == expected_crc3);
 
     // Test case 4: Single byte 0x10
     std::vector<uint8_t> data4 = {0x10};
-    uint16_t expected_crc4 = 0x8108;
+    uint16_t expected_crc4 = 0x1081; // Corrected expected value for CRC-16/KERMIT
     uint16_t actual_crc4 = IoHomeNode::crc16(data4.data(), data4.size());
     runTest("Single byte 0x10", actual_crc4 == expected_crc4);
 
