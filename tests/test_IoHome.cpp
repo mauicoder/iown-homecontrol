@@ -281,11 +281,13 @@ int main() {
             return RADIOLIB_ERR_NONE;
         }
 
-        int16_t startTransmit(const uint8_t* data, size_t len) override {
+        // Correct signature for startTransmit based on PhysicalLayer.h:400:21
+        int16_t startTransmit(const uint8_t* data, size_t len, uint8_t addr = 0) override {
             // Can store data here for verification if needed
             return startTransmitResult;
         }
 
+        // Correct signature for startReceive based on PhysicalLayer.h:349:21 (parameterless version)
         int16_t startReceive() override {
             return startReceiveResult;
         }
@@ -308,39 +310,41 @@ int main() {
         }
 
         // Minimal dummy implementations for other pure virtual methods required to make MockPhysicalLayer concrete.
-        // Only mark with 'override' if the base class method is truly virtual and matches the signature.
-        int16_t begin(float freq, float bw, uint8_t sf, uint8_t cr, uint8_t syncWord, int8_t pwr, uint16_t preamble, float tcxoVoltage, bool use, float tempCoeff) override { return RADIOLIB_ERR_NONE; }
-        int16_t beginFSK(float freq, float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, int8_t pwr, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; }
-        int16_t end() override { return RADIOLIB_ERR_NONE; }
-        int16_t setOutputPower(int8_t power) override { return RADIOLIB_ERR_NONE; }
-        int16_t configFSK(float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; }
-        int16_t startReceive(uint32_t timeout, uint32_t channel) override { return RADIOLIB_ERR_NONE; } // Specific overload
-        int16_t readData(uint8_t* data, size_t len, size_t offset) override { return RADIOLIB_ERR_NONE; }
-        int16_t readData(std::string& str) override { return RADIOLIB_ERR_NONE; }
-        int16_t readData(std::string& str, size_t len) override { return RADIOLIB_ERR_NONE; }
-        int16_t readData(std::string& str, size_t len, size_t offset) override { return RADIOLIB_ERR_NONE; }
-        int16_t startTransmit(const std::string& str, uint32_t timeout, uint32_t channel) override { return RADIOLIB_ERR_NONE; }
-        int16_t startTransmit(const std::string& str) override { return RADIOLIB_ERR_NONE; }
-        float getSNR() override { return 0.0; }
-        float getRSSI(bool actual = false) override { return 0.0; }
-        size_t getPacketLength() const override { return 0; } // const version
-        int16_t fixedPacketLengthMode(size_t len) override { return RADIOLIB_ERR_NONE; }
-        int16_t variablePacketLengthMode() override { return RADIOLIB_ERR_NONE; }
-        int16_t standby() override { return RADIOLIB_ERR_NONE; }
-        int16_t sleep() override { return RADIOLIB_ERR_NONE; }
-        int16_t setDioAction(uint32_t pin, uint32_t fnc) override { return RADIOLIB_ERR_NONE; }
-        int16_t clearDioAction(uint32_t pin) override { return RADIOLIB_ERR_NONE; }
-        int16_t setDataRate(DataRate_t dr, ModemType_t modem = RADIOLIB_MODEM_NONE) override { return RADIOLIB_ERR_NONE; } // Correct signature
-        int16_t setDataShaping(uint8_t dataShaping) override { return RADIOLIB_ERR_NONE; }
-        int16_t setEncoding(uint8_t encoding) override { return RADIOLIB_ERR_NONE; }
-        int16_t setSyncWord(uint8_t* syncWord, size_t len) override { return RADIOLIB_ERR_NONE; }
-        int16_t setPreambleLength(size_t len) override { return RADIOLIB_ERR_NONE; }
-        int16_t setGain(uint8_t gain) override { return RADIOLIB_ERR_NONE; }
-        int16_t enableTestMode() override { return RADIOLIB_ERR_NONE; }
-        int16_t disableTestMode() override { return RADIOLIB_ERR_NONE; }
-        float getFrequencyError(bool update = true) override { return 0.0; }
-        int32_t random(uint32_t max) override { return 0; }
-        int16_t startDirect() override { return RADIOLIB_ERR_NONE; }
+        // Removed 'override' from functions that are not virtual in the base class or do not match signature.
+        // For actual virtual methods, ensured signatures match.
+        int16_t begin(float freq, float bw, uint8_t sf, uint8_t cr, uint8_t syncWord, int8_t pwr, uint16_t preamble, float tcxoVoltage, bool use, float tempCoeff) { return RADIOLIB_ERR_NONE; }
+        int16_t beginFSK(float freq, float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, int8_t pwr, uint16_t preambleLen, bool enableOOK) { return RADIOLIB_ERR_NONE; }
+        int16_t end() override { return RADIOLIB_ERR_NONE; } // This is virtual in PhysicalLayer
+        int16_t setOutputPower(int8_t power) override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t configFSK(float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t startReceive(uint32_t timeout, uint32_t channel) override { return RADIOLIB_ERR_NONE; } // This specific overload is virtual
+        int16_t readData(uint8_t* data, size_t len, size_t offset) { return RADIOLIB_ERR_NONE; }
+        int16_t readData(std::string& str) { return RADIOLIB_ERR_NONE; }
+        int16_t readData(std::string& str, size_t len) { return RADIOLIB_ERR_NONE; }
+        int16_t readData(std::string& str, size_t len, size_t offset) { return RADIOLIB_ERR_NONE; }
+        int16_t startTransmit(const std::string& str, uint32_t timeout, uint32_t channel) { return RADIOLIB_ERR_NONE; }
+        int16_t startTransmit(const std::string& str) { return RADIOLIB_ERR_NONE; }
+        float getSNR() override { return 0.0; } // This is virtual
+        float getRSSI(bool actual = false) { return 0.0; } // Base PhysicalLayer has getRSSI() (no params) as virtual. This overload might not be.
+        size_t getPacketLength() const override { return 0; } // This const version is virtual
+        int16_t fixedPacketLengthMode(size_t len) override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t variablePacketLengthMode() override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t standby() override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t sleep() override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t setDioAction(uint32_t pin, uint32_t fnc) override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t clearDioAction(uint32_t pin) override { return RADIOLIB_ERR_NONE; } // This is virtual
+        // Correct signature for setDataRate based on PhysicalLayer.h:531:21
+        int16_t setDataRate(DataRate_t dr, ModemType_t modem = RADIOLIB_MODEM_NONE) override { return RADIOLIB_ERR_NONE; }
+        int16_t setDataShaping(uint8_t dataShaping) override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t setEncoding(uint8_t encoding) override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t setSyncWord(uint8_t* syncWord, size_t len) override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t setPreambleLength(size_t len) override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t setGain(uint8_t gain) override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t enableTestMode() override { return RADIOLIB_ERR_NONE; } // This is virtual
+        int16_t disableTestMode() override { return RADIOLIB_ERR_NONE; } // This is virtual
+        float getFrequencyError(bool update = true) override { return 0.0; } // This is virtual
+        int32_t random(uint32_t max) override { return 0; } // This is virtual
+        int16_t startDirect() override { return RADIOLIB_ERR_NONE; } // This is virtual
         int16_t readRssiDirect() override { return RADIOLIB_ERR_NONE; }
 
     };
