@@ -2,6 +2,7 @@
 #include <vector>
 #include <cassert>
 #include <iomanip> // For std::hex, std::setw, std::setfill
+#include <cmath>   // Required for std::abs
 
 // Include the header for the function we want to test
 #include "IoHome.h"
@@ -408,11 +409,14 @@ int main() {
     int16_t tx_result_success = ioHomeNode_tx_test.transmitFrame(frame_to_transmit);
     runTest("transmitFrame (success) - return code", tx_result_success == RADIOLIB_ERR_NONE);
     float expected_freq = (test_channel.c0 + test_channel.c1 / 100.0);
-    if (mockPhy.actualFrequencySet != expected_freq) {
-        std::cout << "DEBUG: Expected frequency: " << std::fixed << std::setprecision(2) << expected_freq
-                  << ", Actual frequency set: " << std::fixed << std::setprecision(2) << mockPhy.actualFrequencySet << std::endl;
+    float actual_freq_set = mockPhy.actualFrequencySet;
+    float epsilon = 0.00001; // Epsilon for floating-point comparison
+
+    if (std::abs(actual_freq_set - expected_freq) > epsilon) {
+        std::cout << "DEBUG: Expected frequency: " << std::fixed << std::setprecision(5) << expected_freq
+                  << ", Actual frequency set: " << std::fixed << std::setprecision(5) << actual_freq_set << std::endl;
     }
-    runTest("transmitFrame (success) - frequency set", mockPhy.actualFrequencySet == expected_freq);
+    runTest("transmitFrame (success) - frequency set", std::abs(actual_freq_set - expected_freq) < epsilon);
 
     // Test case 25: Transmit a frame (simulated failure)
     mockPhy.startTransmitResult = RADIOLIB_ERR_TX_TIMEOUT; // Simulate failure
