@@ -47,7 +47,21 @@ int16_t IoHomeNode::setPhyProperties() {
   return(state);
 } // set the physical layer configuration
 
-uint16_t IoHomeNode::crc16() {}
+uint16_t IoHomeNode::crc16(const uint8_t* data, size_t length) {
+  // CRC-16/CCITT (KERMIT) - Polynomial: 0x8408 (0x1021 bit-reversed), Init: 0x0000
+  uint16_t crc = 0x0000;
+  for (size_t i = 0; i < length; i++) {
+    crc ^= data[i];
+    for (uint8_t bit = 0; bit < 8; bit++) {
+      if (crc & 0x0001) {
+        crc = (crc >> 1) ^ 0x8408;
+      } else {
+        crc >>= 1;
+      }
+    }
+  }
+  return crc;
+}
 
 template<typename T>
 T IoHomeNode::ntoh(uint8_t* buff, size_t size) {
