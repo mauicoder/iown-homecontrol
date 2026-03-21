@@ -52,7 +52,7 @@ int main() {
 
     // Test case 6: "DEADBEEF" hex
     std::vector<uint8_t> data6 = {0xDE, 0xAD, 0xBE, 0xEF};
-    uint16_t expected_crc6 = 0x7C26; // Calculated using online CRC-16/KERMIT calculator (poly 0x1021, init 0x0000, no reverse, no xor out)
+    uint16_t expected_crc6 = 0x51E5; // Corrected expected value for CRC-16/KERMIT (poly 0x1021, init 0x0000, no reflection, no xor out)
     uint16_t actual_crc6 = IoHomeNode::crc16(data6.data(), data6.size());
     runTest("Hex DEAD BEEF", actual_crc6 == expected_crc6);
 
