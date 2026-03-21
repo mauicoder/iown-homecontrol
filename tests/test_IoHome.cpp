@@ -370,6 +370,14 @@ int main() {
             return RADIOLIB_ERR_NONE;
         }
 
+        // Override PhysicalLayer::transmit (missing in previous mock)
+        int16_t transmit(const uint8_t* data, size_t len, uint8_t addr = 0) override {
+            (void)data; (void)len; (void)addr; // Suppress unused parameter warnings
+            // This mock method can be expanded if test cases require specific behavior
+            // from the base `transmit` function (which `IoHomeNode` does not currently call directly).
+            return RADIOLIB_ERR_NONE;
+        }
+
         int16_t startTransmit(const uint8_t* data, size_t len, uint8_t addr = 0) override {
             (void)data; (void)len; (void)addr; // Suppress unused parameter warnings
             return startTransmitResult;
