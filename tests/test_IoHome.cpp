@@ -443,11 +443,11 @@ int main() {
     mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
     mockPhy.rxBufferInternal = valid_rx_frame;
     mockPhy.mockPacketLength = valid_rx_frame.size();
-    mockPhy.readDataResult = RADIOLIB_ERR_SPI_READ_FAILED; // Simulate SPI read failure
+    mockPhy.readDataResult = RADIOLIB_ERR_RX_TIMEOUT; // Simulate SPI read failure
 
     IoHomeFrame_t receivedFrame5;
     int16_t rx_result_read_fail = ioHomeNode_tx_test.receiveFrame(receivedFrame5);
-    runTest("receiveFrame (read data fail) - return code", rx_result_read_fail == RADIOLIB_ERR_SPI_READ_FAILED);
+    runTest("receiveFrame (read data fail) - return code", rx_result_read_fail == RADIOLIB_ERR_RX_TIMEOUT);
     runTest("receiveFrame (read data fail) - frame invalid", !receivedFrame5.isValid);
 
     // Test case 31: Frame too short to be parsed as io-homecontrol (implicitly handled by parseFrame)
