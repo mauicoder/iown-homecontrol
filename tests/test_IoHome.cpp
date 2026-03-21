@@ -288,7 +288,6 @@ int main() {
         // Mock methods with custom logic (called by IoHomeNode)
         int16_t setFrequency(float freq) override {
             actualFrequencySet = freq;
-            std::cout << "DEBUG: MockPhysicalLayer setFrequency called with: " << std::fixed << std::setprecision(5) << freq << std::endl;
             return RADIOLIB_ERR_NONE;
         }
 
@@ -570,7 +569,7 @@ int main() {
     int16_t tx_result_failure = ioHomeNode_tx_test.transmitFrame(frame_to_transmit);
     runTest("transmitFrame (failure) - return code", tx_result_failure == RADIOLIB_ERR_TX_TIMEOUT);
     // Frequency should still be set correctly even if transmit fails
-    runTest("transmitFrame (failure) - frequency set", mockPhy.actualFrequencySet == (test_channel.c0 + test_channel.c1 / 100.0));
+    runTest("transmitFrame (failure) - frequency set", std::abs(mockPhy.actualFrequencySet - expected_freq) < epsilon);
 
 
     std::cout << "All IoHomeNode Transmit tests completed." << std::endl;
