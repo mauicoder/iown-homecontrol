@@ -77,6 +77,19 @@ int main() {
     uint16_t actual_crc8 = IoHomeNode::crc16(data8.data(), data8.size());
     runTest("10 0xFF bytes", actual_crc8 == expected_crc8);
 
+    // Test case 9: Alternating bytes (0x55, 0xAA, 0x55, 0xAA)
+    std::vector<uint8_t> data9 = {0x55, 0xAA, 0x55, 0xAA};
+    uint16_t expected_crc9 = 0x70F1; // Calculated with CRC-16/KERMIT
+    uint16_t actual_crc9 = IoHomeNode::crc16(data9.data(), data9.size());
+    runTest("Alternating 0x55/0xAA bytes", actual_crc9 == expected_crc9);
+
+    // Test case 10: Longer string "The quick brown fox jumps over the lazy dog."
+    std::string str10 = "The quick brown fox jumps over the lazy dog.";
+    std::vector<uint8_t> data10(str10.begin(), str10.end());
+    uint16_t expected_crc10 = 0x3228; // Calculated with CRC-16/KERMIT
+    uint16_t actual_crc10 = IoHomeNode::crc16(data10.data(), data10.size());
+    runTest("Longer string 'The quick brown fox...'", actual_crc10 == expected_crc10);
+
 
     std::cout << "All IoHomeNode CRC16 tests completed." << std::endl;
 
