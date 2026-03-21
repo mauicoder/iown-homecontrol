@@ -2,6 +2,8 @@
 #define _IOHOME_H
 
 #include <RadioLib.h>
+#include <vector>     // Required for std::vector
+#include <algorithm>  // Required for std::copy
 
 #pragma region CONST
 // preamble
