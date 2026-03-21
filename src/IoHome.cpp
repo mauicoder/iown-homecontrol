@@ -2,7 +2,12 @@
 #include <RadioLib.h>
 #include "TypeDef.h"
 #include "protocols/PhysicalLayer/PhysicalLayer.h"
-#include <Arduino.h> // For Serial.print/printf
+#include "debug_iohome.h" // For conditional Serial.printf
+#if !defined(ARDUINO) && defined(DEBUG_IOHOME)
+// Define the global mock Serial object for non-Arduino debug builds
+// This definition must be in a single compilation unit.
+MockSerialClass Serial;
+#endif
 
 IoHomeNode::IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel_param)
   : phyLayer(phy), channel(channel_param) {
