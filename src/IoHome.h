@@ -5,6 +5,9 @@
 #include <vector>     // Required for std::vector
 #include <algorithm>  // Required for std::copy
 
+// Define DEBUG_IOHOME to enable debug logs for IoHomeNode
+#define DEBUG_IOHOME
+
 #pragma region CONST
 // preamble
 #define IOHOME_PREAMBLE_LEN                 (512) // Preamble Length in Bits
@@ -150,7 +153,13 @@ class IoHomeNode {
       \returns True if the calculated CRC matches the CRC in the frame, false otherwise.
     */
     static bool validateFrameCrc(const uint8_t* frame, size_t frameLength) {
+#ifdef DEBUG_IOHOME
+      Serial.printf("[IoHomeNode::validateFrameCrc] Validating CRC for frame of length: %u\n", frameLength);
+#endif
       if (frameLength < IOHOME_FRAME_CRC_LEN) {
+#ifdef DEBUG_IOHOME
+        Serial.printf("[IoHomeNode::validateFrameCrc] Frame too short (len %u) to contain CRC (min %u).\n", frameLength, IOHOME_FRAME_CRC_LEN);
+#endif
         return false; // Frame too short to even contain a CRC
       }
 
@@ -160,6 +169,9 @@ class IoHomeNode {
       // Extract the received CRC from the end of the frame
       uint16_t receivedCrc = IoHomeNode::ntoh<uint16_t>((uint8_t*)frame + IOHOME_FRAME_CRC_POS(frameLength));
 
+#ifdef DEBUG_IOHOME
+      Serial.printf("[IoHomeNode::validateFrameCrc] Calculated CRC: 0x%04X, Received CRC: 0x%04X\n", calculatedCrc, receivedCrc);
+#endif
       return calculatedCrc == receivedCrc;
     }
 

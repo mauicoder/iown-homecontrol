@@ -16,7 +16,33 @@
 #define RADIOLIB_IRQ_ALL 0xFFFFFFFFU // A common full mask
 #endif
 
-// Helper function to print test results
+// Helper function to print test results with optional debug info
+template<typename T_Actual, typename T_Expected>
+void runTest(const std::string& testName, bool condition, const std::string& debugMsg = "", T_Actual actualVal = T_Actual(), T_Expected expectedVal = T_Expected()) {
+    std::cout << "Running test: " << testName << " - ";
+    if (condition) {
+        std::cout << "PASSED" << std::endl;
+    } else {
+        std::cout << "FAILED" << std::endl;
+        if (!debugMsg.empty()) {
+            std::cout << "    DEBUG: " << debugMsg << std::endl;
+        }
+        // Generic debug output for different types
+        if constexpr (std::is_integral_v<T_Actual> && std::is_integral_v<T_Expected>) {
+            std::cout << "    Expected: 0x" << std::hex << std::setw(sizeof(T_Expected)*2) << std::setfill('0') << (long long)expectedVal
+                      << ", Actual: 0x" << std::hex << std::setw(sizeof(T_Actual)*2) << std::setfill('0') << (long long)actualVal << std::endl;
+            std::cout << std::dec; // Reset to decimal
+        } else if constexpr (std::is_floating_point_v<T_Actual> && std::is_floating_point_v<T_Expected>) {
+            std::cout << "    Expected: " << std::fixed << std::setprecision(5) << expectedVal
+                      << ", Actual: " << std::fixed << std::setprecision(5) << actualVal << std::endl;
+        }
+        // Specific output for vectors, if needed. This is more complex to generalize nicely.
+        // For now, rely on specific debug blocks.
+    }
+    assert(condition); // Will terminate if condition is false
+}
+
+// Overload for tests without specific values to compare, just a boolean condition
 void runTest(const std::string& testName, bool condition) {
     std::cout << "Running test: " << testName << " - ";
     if (condition) {
@@ -27,6 +53,16 @@ void runTest(const std::string& testName, bool condition) {
     assert(condition); // Will terminate if condition is false
 }
 
+
+// Helper to print a vector of bytes in hex
+void printHexVector(const std::string& label, const std::vector<uint8_t>& vec) {
+    std::cout << "    " << label << " (len " << vec.size() << "): ";
+    for (uint8_t byte : vec) {
+        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)byte << " ";
+    }
+    std::cout << std::dec << std::endl;
+}
+
 int main() {
     std::cout << "Starting IoHomeNode CRC16 tests..." << std::endl;
 
@@ -34,71 +70,62 @@ int main() {
     std::vector<uint8_t> data1 = {};
     uint16_t expected_crc1 = 0x0000;
     uint16_t actual_crc1 = IoHomeNode::crc16(data1.data(), data1.size());
-    runTest("Empty data", actual_crc1 == expected_crc1);
+    runTest("Empty data", actual_crc1 == expected_crc1, "", actual_crc1, expected_crc1);
     
     // Test case 2: Single byte 0x00
     std::vector<uint8_t> data2 = {0x00};
     uint16_t expected_crc2 = 0x0000;
     uint16_t actual_crc2 = IoHomeNode::crc16(data2.data(), data2.size());
-    runTest("Single byte 0x00", actual_crc2 == expected_crc2);
+    runTest("Single byte 0x00", actual_crc2 == expected_crc2, "", actual_crc2, expected_crc2);
 
     // Test case 3: Single byte 0x01
     std::vector<uint8_t> data3 = {0x01};
     uint16_t expected_crc3 = 0x1189; // Corrected expected value for CRC-16/KERMIT
     uint16_t actual_crc3 = IoHomeNode::crc16(data3.data(), data3.size());
-    runTest("Single byte 0x01", actual_crc3 == expected_crc3);
+    runTest("Single byte 0x01", actual_crc3 == expected_crc3, "", actual_crc3, expected_crc3);
 
     // Test case 4: Single byte 0x10
     std::vector<uint8_t> data4 = {0x10};
     uint16_t expected_crc4 = 0x1081; // Corrected expected value for CRC-16/KERMIT
     uint16_t actual_crc4 = IoHomeNode::crc16(data4.data(), data4.size());
-    runTest("Single byte 0x10", actual_crc4 == expected_crc4);
+    runTest("Single byte 0x10", actual_crc4 == expected_crc4, "", actual_crc4, expected_crc4);
 
     // Test case 5: "123456789" ASCII
     std::vector<uint8_t> data5 = {0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39};
     uint16_t expected_crc5 = 0x2189; // Calculated using online CRC-16/KERMIT calculator (poly 0x1021, init 0x0000, no reverse, no xor out)
     uint16_t actual_crc5 = IoHomeNode::crc16(data5.data(), data5.size());
-    runTest("ASCII '123456789'", actual_crc5 == expected_crc5);
+    runTest("ASCII '123456789'", actual_crc5 == expected_crc5, "", actual_crc5, expected_crc5);
 
     // Test case 6: "DEADBEEF" hex
     std::vector<uint8_t> data6 = {0xDE, 0xAD, 0xBE, 0xEF};
     uint16_t expected_crc6 = 0x1915; // Corrected expected value for CRC-16/KERMIT (poly 0x1021, init 0x0000, no reflection, no xor out)
     uint16_t actual_crc6 = IoHomeNode::crc16(data6.data(), data6.size());
-    
-    // Debugging output for Hex DEAD BEEF test
-    if (actual_crc6 != expected_crc6) {
-        std::cout << "DEBUG: For 'Hex DEAD BEEF', expected CRC: 0x" 
-                  << std::hex << std::setw(4) << std::setfill('0') << expected_crc6
-                  << ", actual CRC: 0x" 
-                  << std::hex << std::setw(4) << std::setfill('0') << actual_crc6 << std::endl;
-    }
-    std::cout << std::dec; // Reset to decimal for subsequent output
-    runTest("Hex DEAD BEEF", actual_crc6 == expected_crc6);
+    runTest("Hex DEAD BEEF", actual_crc6 == expected_crc6, "CRC mismatch for DEADBEEF", actual_crc6, expected_crc6);
 
     // Test case 7: Data length 10, all zeros
     std::vector<uint8_t> data7(10, 0x00);
     uint16_t expected_crc7 = 0x0000;
     uint16_t actual_crc7 = IoHomeNode::crc16(data7.data(), data7.size());
-    runTest("10 zero bytes", actual_crc7 == expected_crc7);
+    runTest("10 zero bytes", actual_crc7 == expected_crc7, "", actual_crc7, expected_crc7);
 
     // Test case 8: Data length 10, all ones (0xFF)
     std::vector<uint8_t> data8(10, 0xFF);
     uint16_t expected_crc8 = 0x1BE2; // Corrected expected value for CRC-16/KERMIT, 10 bytes of 0xFF
     uint16_t actual_crc8 = IoHomeNode::crc16(data8.data(), data8.size());
-    runTest("10 0xFF bytes", actual_crc8 == expected_crc8);
+    runTest("10 0xFF bytes", actual_crc8 == expected_crc8, "", actual_crc8, expected_crc8);
 
     // Test case 9: Alternating bytes (0x55, 0xAA, 0x55, 0xAA)
     std::vector<uint8_t> data9 = {0x55, 0xAA, 0x55, 0xAA};
     uint16_t expected_crc9 = 0x60F3; // Corrected expected value for CRC-16/KERMIT
     uint16_t actual_crc9 = IoHomeNode::crc16(data9.data(), data9.size());
-    runTest("Alternating 0x55/0xAA bytes", actual_crc9 == expected_crc9);
+    runTest("Alternating 0x55/0xAA bytes", actual_crc9 == expected_crc9, "", actual_crc9, expected_crc9);
 
     // Test case 10: Longer string "The quick brown fox jumps over the lazy dog."
     std::string str10 = "The quick brown fox jumps over the lazy dog.";
     std::vector<uint8_t> data10(str10.begin(), str10.end());
     uint16_t expected_crc10 = 0x07FC; // Corrected expected value for CRC-16/KERMIT
     uint16_t actual_crc10 = IoHomeNode::crc16(data10.data(), data10.size());
-    runTest("Longer string 'The quick brown fox...'", actual_crc10 == expected_crc10);
+    runTest("Longer string 'The quick brown fox...'", actual_crc10 == expected_crc10, "", actual_crc10, expected_crc10);
 
     std::cout << "\nStarting IoHomeNode Frame Utility tests..." << std::endl;
 
@@ -107,12 +134,14 @@ int main() {
     // Frame: [CTRLBYTE0 (0x05), CTRLBYTE1, MAC_SRC, MAC_DEST, COMMAND, PARAMETER]
     std::vector<uint8_t> dummy_frame_len_5 = {0x05, 0x00, 0x00, 0x00, 0x00, 0x00};
     size_t expected_msg_len_5 = (0x05 & 0x1F) + 1; // Expected: 6
-    runTest("IOHOME_MSG_LEN (length 5)", IOHOME_MSG_LEN(dummy_frame_len_5.data()) == expected_msg_len_5);
+    runTest("IOHOME_MSG_LEN (length 5)", IOHOME_MSG_LEN(dummy_frame_len_5.data()) == expected_msg_len_5, 
+            "Macro length mismatch", IOHOME_MSG_LEN(dummy_frame_len_5.data()), expected_msg_len_5);
 
     // A message with length 0x1F (0b11111) in CTRLBYTE0 would mean 31 + 1 = 32 bytes message length
     std::vector<uint8_t> dummy_frame_len_1F = {0x1F}; // Max length code
     size_t expected_msg_len_1F = (0x1F & 0x1F) + 1; // Expected: 32
-    runTest("IOHOME_MSG_LEN (length 1F)", IOHOME_MSG_LEN(dummy_frame_len_1F.data()) == expected_msg_len_1F);
+    runTest("IOHOME_MSG_LEN (length 1F)", IOHOME_MSG_LEN(dummy_frame_len_1F.data()) == expected_msg_len_1F,
+            "Macro length mismatch", IOHOME_MSG_LEN(dummy_frame_len_1F.data()), expected_msg_len_1F);
 
     // --- Test validateFrameCrc ---
 
@@ -165,16 +194,24 @@ int main() {
     size_t expected_message_body_len_no_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN; // 8 + 1 = 9
     size_t expected_total_frame_len_no_payload = expected_message_body_len_no_payload + IOHOME_FRAME_CRC_LEN; // 9 + 2 = 11
 
-    runTest("buildFrame (no payload) - total length", frame_no_payload.size() == expected_total_frame_len_no_payload);
+    runTest("buildFrame (no payload) - total length", frame_no_payload.size() == expected_total_frame_len_no_payload,
+            "Total length mismatch", frame_no_payload.size(), expected_total_frame_len_no_payload);
     runTest("buildFrame (no payload) - CRC valid", IoHomeNode::validateFrameCrc(frame_no_payload.data(), frame_no_payload.size()));
     // Verify specific bytes
-    runTest("buildFrame (no payload) - CTRL0 length bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_no_payload - 1)); // 9 - 1 = 8
-    runTest("buildFrame (no payload) - CTRL0 mode/order bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & ~0x1F) == test_ctrl0_base);
-    runTest("buildFrame (no payload) - CTRL1", frame_no_payload[IOHOME_CTRLBYTE1_POS] == test_ctrl1);
-    runTest("buildFrame (no payload) - SRC_MAC[0]", frame_no_payload[IOHOME_MAC_SOURCE_POS] == test_src_mac.n0);
+    runTest("buildFrame (no payload) - CTRL0 length bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_no_payload - 1),
+            "CTRL0 length bits mismatch", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & 0x1F), (expected_message_body_len_no_payload - 1)); // 9 - 1 = 8
+    runTest("buildFrame (no payload) - CTRL0 mode/order bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & ~0x1F) == test_ctrl0_base,
+            "CTRL0 mode/order bits mismatch", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & ~0x1F), test_ctrl0_base);
+    runTest("buildFrame (no payload) - CTRL1", frame_no_payload[IOHOME_CTRLBYTE1_POS] == test_ctrl1,
+            "CTRL1 mismatch", frame_no_payload[IOHOME_CTRLBYTE1_POS], test_ctrl1);
+    runTest("buildFrame (no payload) - SRC_MAC[0]", frame_no_payload[IOHOME_MAC_SOURCE_POS] == test_src_mac.n0,
+            "SRC_MAC[0] mismatch", frame_no_payload[IOHOME_MAC_SOURCE_POS], test_src_mac.n0);
     
-    runTest("buildFrame (no payload) - DEST_MAC[0]", frame_no_payload[IOHOME_MAC_DEST_POS] == test_dest_mac.n0);
-    runTest("buildFrame (no payload) - CMD_ID", frame_no_payload[IOHOME_FRAME_HEADER_LEN] == test_cmd_id);
+    runTest("buildFrame (no payload) - DEST_MAC[0]", frame_no_payload[IOHOME_MAC_DEST_POS] == test_dest_mac.n0,
+            "DEST_MAC[0] mismatch", frame_no_payload[IOHOME_MAC_DEST_POS], test_dest_mac.n0);
+    runTest("buildFrame (no payload) - CMD_ID", frame_no_payload[IOHOME_FRAME_HEADER_LEN] == test_cmd_id,
+            "CMD_ID mismatch", frame_no_payload[IOHOME_FRAME_HEADER_LEN], test_cmd_id);
+    printHexVector("Built frame (no payload)", frame_no_payload);
 
 
     // Test case 16: Build frame with a small payload
@@ -185,12 +222,18 @@ int main() {
     size_t expected_message_body_len_small_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + small_payload_vec.size(); // 8 + 1 + 3 = 12
     size_t expected_total_frame_len_small_payload = expected_message_body_len_small_payload + IOHOME_FRAME_CRC_LEN; // 12 + 2 = 14
 
-    runTest("buildFrame (small payload) - total length", frame_small_payload.size() == expected_total_frame_len_small_payload);
+    runTest("buildFrame (small payload) - total length", frame_small_payload.size() == expected_total_frame_len_small_payload,
+            "Total length mismatch", frame_small_payload.size(), expected_total_frame_len_small_payload);
     runTest("buildFrame (small payload) - CRC valid", IoHomeNode::validateFrameCrc(frame_small_payload.data(), frame_small_payload.size()));
     // Verify specific bytes
-    runTest("buildFrame (small payload) - CTRL0 length bits", (frame_small_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_small_payload - 1)); // 12 - 1 = 11
-    runTest("buildFrame (small payload) - Payload[0]", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN] == 0xA0);
-    runTest("buildFrame (small payload) - Payload[2]", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + 2] == 0xC2);
+    runTest("buildFrame (small payload) - CTRL0 length bits", (frame_small_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_small_payload - 1),
+            "CTRL0 length bits mismatch", (frame_small_payload[IOHOME_CTRLBYTE0_POS] & 0x1F), (expected_message_body_len_small_payload - 1)); // 12 - 1 = 11
+    runTest("buildFrame (small payload) - Payload[0]", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN] == 0xA0,
+            "Payload[0] mismatch", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN], 0xA0);
+    runTest("buildFrame (small payload) - Payload[2]", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + 2] == 0xC2,
+            "Payload[2] mismatch", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + 2], 0xC2);
+    printHexVector("Built frame (small payload)", frame_small_payload);
+
 
     // Test case 17: Build frame with maximum possible payload length
     // The length field in CTRLBYTE0 is 5 bits, so max value is 31 (0x1F).
@@ -205,11 +248,16 @@ int main() {
     size_t expected_message_body_len_max_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + max_payload_size; // 8 + 1 + 23 = 32
     size_t expected_total_frame_len_max_payload = expected_message_body_len_max_payload + IOHOME_FRAME_CRC_LEN; // 32 + 2 = 34
 
-    runTest("buildFrame (max payload) - total length", frame_max_payload.size() == expected_total_frame_len_max_payload);
+    runTest("buildFrame (max payload) - total length", frame_max_payload.size() == expected_total_frame_len_max_payload,
+            "Total length mismatch", frame_max_payload.size(), expected_total_frame_len_max_payload);
     runTest("buildFrame (max payload) - CRC valid", IoHomeNode::validateFrameCrc(frame_max_payload.data(), frame_max_payload.size()));
-    runTest("buildFrame (max payload) - CTRL0 length bits", (frame_max_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_max_payload - 1)); // 32 - 1 = 31 = 0x1F
-    runTest("buildFrame (max payload) - Payload[0]", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN] == 0xDE);
-    runTest("buildFrame (max payload) - Last Payload byte", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + max_payload_size - 1] == 0xDE);
+    runTest("buildFrame (max payload) - CTRL0 length bits", (frame_max_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_max_payload - 1),
+            "CTRL0 length bits mismatch", (frame_max_payload[IOHOME_CTRLBYTE0_POS] & 0x1F), (expected_message_body_len_max_payload - 1)); // 32 - 1 = 31 = 0x1F
+    runTest("buildFrame (max payload) - Payload[0]", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN] == 0xDE,
+            "Payload[0] mismatch", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN], 0xDE);
+    runTest("buildFrame (max payload) - Last Payload byte", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + max_payload_size - 1] == 0xDE,
+            "Last Payload byte mismatch", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + max_payload_size - 1], 0xDE);
+    printHexVector("Built frame (max payload)", frame_max_payload);
 
     std::cout << "All IoHomeNode Frame Building tests completed." << std::endl;
 
@@ -221,45 +269,66 @@ int main() {
     std::vector<uint8_t> parsed_frame_no_payload = IoHomeNode::buildFrame(
       test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, no_payload_vec
     );
+    printHexVector("Frame to parse (no payload)", parsed_frame_no_payload);
     bool parse_result_no_payload = IoHomeNode::parseFrame(parsed_frame_no_payload.data(), parsed_frame_no_payload.size(), parsed_frame);
     runTest("parseFrame (no payload) - overall result", parse_result_no_payload);
     runTest("parseFrame (no payload) - isValid flag", parsed_frame.isValid);
-    runTest("parseFrame (no payload) - CTRL0", parsed_frame.ctrlByte0 == parsed_frame_no_payload[IOHOME_CTRLBYTE0_POS]);
-    runTest("parseFrame (no payload) - CTRL1", parsed_frame.ctrlByte1 == test_ctrl1);
-    runTest("parseFrame (no payload) - SRC_MAC[0]", parsed_frame.sourceMac.n0 == test_src_mac.n0);
-    runTest("parseFrame (no payload) - DEST_MAC[0]", parsed_frame.destMac.n0 == test_dest_mac.n0);
-    runTest("parseFrame (no payload) - CMD_ID", parsed_frame.commandId == test_cmd_id);
-    runTest("parseFrame (no payload) - Payload size", parsed_frame.payload.empty());
+    runTest("parseFrame (no payload) - CTRL0", parsed_frame.ctrlByte0 == parsed_frame_no_payload[IOHOME_CTRLBYTE0_POS],
+            "CTRL0 mismatch", parsed_frame.ctrlByte0, parsed_frame_no_payload[IOHOME_CTRLBYTE0_POS]);
+    runTest("parseFrame (no payload) - CTRL1", parsed_frame.ctrlByte1 == test_ctrl1,
+            "CTRL1 mismatch", parsed_frame.ctrlByte1, test_ctrl1);
+    runTest("parseFrame (no payload) - SRC_MAC[0]", parsed_frame.sourceMac.n0 == test_src_mac.n0,
+            "SRC_MAC[0] mismatch", parsed_frame.sourceMac.n0, test_src_mac.n0);
+    runTest("parseFrame (no payload) - DEST_MAC[0]", parsed_frame.destMac.n0 == test_dest_mac.n0,
+            "DEST_MAC[0] mismatch", parsed_frame.destMac.n0, test_dest_mac.n0);
+    runTest("parseFrame (no payload) - CMD_ID", parsed_frame.commandId == test_cmd_id,
+            "CMD_ID mismatch", parsed_frame.commandId, test_cmd_id);
+    runTest("parseFrame (no payload) - Payload size", parsed_frame.payload.empty(),
+            "Payload size mismatch (expected empty)", parsed_frame.payload.size(), (size_t)0);
 
     // Test case 19: Parse a valid frame with a small payload
     std::vector<uint8_t> parsed_frame_small_payload = IoHomeNode::buildFrame(
       test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, small_payload_vec
     );
+    printHexVector("Frame to parse (small payload)", parsed_frame_small_payload);
     bool parse_result_small_payload = IoHomeNode::parseFrame(parsed_frame_small_payload.data(), parsed_frame_small_payload.size(), parsed_frame);
     runTest("parseFrame (small payload) - overall result", parse_result_small_payload);
     runTest("parseFrame (small payload) - isValid flag", parsed_frame.isValid);
-    runTest("parseFrame (small payload) - Payload size", parsed_frame.payload.size() == small_payload_vec.size());
+    runTest("parseFrame (small payload) - Payload size", parsed_frame.payload.size() == small_payload_vec.size(),
+            "Payload size mismatch", parsed_frame.payload.size(), small_payload_vec.size());
     runTest("parseFrame (small payload) - Payload content", parsed_frame.payload == small_payload_vec);
+    if (!(parsed_frame.payload == small_payload_vec)) {
+        printHexVector("    Expected payload", small_payload_vec);
+        printHexVector("    Actual payload", parsed_frame.payload);
+    }
 
     // Test case 20: Parse a valid frame with maximum payload
     std::vector<uint8_t> parsed_frame_max_payload = IoHomeNode::buildFrame(
       test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, max_payload_vec
     );
+    printHexVector("Frame to parse (max payload)", parsed_frame_max_payload);
     bool parse_result_max_payload = IoHomeNode::parseFrame(parsed_frame_max_payload.data(), parsed_frame_max_payload.size(), parsed_frame);
     runTest("parseFrame (max payload) - overall result", parse_result_max_payload);
     runTest("parseFrame (max payload) - isValid flag", parsed_frame.isValid);
-    runTest("parseFrame (max payload) - Payload size", parsed_frame.payload.size() == max_payload_vec.size());
+    runTest("parseFrame (max payload) - Payload size", parsed_frame.payload.size() == max_payload_vec.size(),
+            "Payload size mismatch", parsed_frame.payload.size(), max_payload_vec.size());
     runTest("parseFrame (max payload) - Payload content", parsed_frame.payload == max_payload_vec);
+    if (!(parsed_frame.payload == max_payload_vec)) {
+        printHexVector("    Expected payload", max_payload_vec);
+        printHexVector("    Actual payload", parsed_frame.payload);
+    }
 
     // Test case 21: Parse a frame with corrupted CRC
     std::vector<uint8_t> corrupted_crc_frame = parsed_frame_small_payload;
     corrupted_crc_frame[corrupted_crc_frame.size() - 1] ^= 0x01; // Corrupt last byte of CRC
+    printHexVector("Frame to parse (corrupted CRC)", corrupted_crc_frame);
     bool parse_result_corrupted_crc = IoHomeNode::parseFrame(corrupted_crc_frame.data(), corrupted_crc_frame.size(), parsed_frame);
     runTest("parseFrame (corrupted CRC) - overall result", !parse_result_corrupted_crc);
     runTest("parseFrame (corrupted CRC) - isValid flag", !parsed_frame.isValid);
 
     // Test case 22: Parse a frame that is too short (less than min header + cmd + CRC)
     std::vector<uint8_t> too_short_frame = {0x01, 0x02, 0x03, 0x04}; // Arbitrary short data
+    printHexVector("Frame to parse (too short)", too_short_frame);
     bool parse_result_too_short = IoHomeNode::parseFrame(too_short_frame.data(), too_short_frame.size(), parsed_frame);
     runTest("parseFrame (too short) - overall result", !parse_result_too_short);
     runTest("parseFrame (too short) - isValid flag", !parsed_frame.isValid);
@@ -268,6 +337,7 @@ int main() {
     // This creates a valid CRC but internal length is inconsistent.
     std::vector<uint8_t> inconsistent_len_frame = parsed_frame_small_payload;
     inconsistent_len_frame[IOHOME_CTRLBYTE0_POS] = (inconsistent_len_frame[IOHOME_CTRLBYTE0_POS] & ~0x1F) | (0x02 - 1); // Declares length of 2, but frame has more
+    printHexVector("Frame to parse (inconsistent declared length)", inconsistent_len_frame);
     bool parse_result_inconsistent_len = IoHomeNode::parseFrame(inconsistent_len_frame.data(), inconsistent_len_frame.size(), parsed_frame);
     runTest("parseFrame (inconsistent declared length) - overall result", !parse_result_inconsistent_len);
     runTest("parseFrame (inconsistent declared length) - isValid flag", !parsed_frame.isValid);
@@ -551,25 +621,26 @@ int main() {
     std::vector<uint8_t> frame_to_transmit = IoHomeNode::buildFrame(
       test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, no_payload_vec
     );
+    printHexVector("Frame to transmit (success)", frame_to_transmit);
     mockPhy.startTransmitResult = RADIOLIB_ERR_NONE; // Simulate success
     int16_t tx_result_success = ioHomeNode_tx_test.transmitFrame(frame_to_transmit);
-    runTest("transmitFrame (success) - return code", tx_result_success == RADIOLIB_ERR_NONE);
+    runTest("transmitFrame (success) - return code", tx_result_success == RADIOLIB_ERR_NONE,
+            "Transmit return code mismatch", tx_result_success, (int16_t)RADIOLIB_ERR_NONE);
     float expected_freq = (test_channel.c0 + test_channel.c1 / 100.0);
     float actual_freq_set = mockPhy.actualFrequencySet;
     float epsilon = 0.00001; // Epsilon for floating-point comparison
 
-    if (std::abs(actual_freq_set - expected_freq) > epsilon) {
-        std::cout << "DEBUG: Expected frequency: " << std::fixed << std::setprecision(5) << expected_freq
-                  << ", Actual frequency set: " << std::fixed << std::setprecision(5) << actual_freq_set << std::endl;
-    }
-    runTest("transmitFrame (success) - frequency set", std::abs(actual_freq_set - expected_freq) < epsilon);
+    runTest("transmitFrame (success) - frequency set", std::abs(actual_freq_set - expected_freq) < epsilon,
+            "Frequency set mismatch", actual_freq_set, expected_freq);
 
     // Test case 25: Transmit a frame (simulated failure)
     mockPhy.startTransmitResult = RADIOLIB_ERR_TX_TIMEOUT; // Simulate failure
     int16_t tx_result_failure = ioHomeNode_tx_test.transmitFrame(frame_to_transmit);
-    runTest("transmitFrame (failure) - return code", tx_result_failure == RADIOLIB_ERR_TX_TIMEOUT);
+    runTest("transmitFrame (failure) - return code", tx_result_failure == RADIOLIB_ERR_TX_TIMEOUT,
+            "Transmit return code mismatch", tx_result_failure, (int16_t)RADIOLIB_ERR_TX_TIMEOUT);
     // Frequency should still be set correctly even if transmit fails
-    runTest("transmitFrame (failure) - frequency set", std::abs(mockPhy.actualFrequencySet - expected_freq) < epsilon);
+    runTest("transmitFrame (failure) - frequency set", std::abs(mockPhy.actualFrequencySet - expected_freq) < epsilon,
+            "Frequency set mismatch", actual_freq_set, expected_freq);
 
 
     std::cout << "All IoHomeNode Transmit tests completed." << std::endl;
@@ -581,6 +652,7 @@ int main() {
     std::vector<uint8_t> valid_rx_frame = IoHomeNode::buildFrame(
         test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, valid_rx_payload
     );
+    printHexVector("Valid RX Frame (expected)", valid_rx_frame);
     mockPhy.rxBufferInternal = valid_rx_frame;
     mockPhy.mockPacketLength = valid_rx_frame.size();
     mockPhy.startReceiveResult = RADIOLIB_ERR_NONE; // Simulate radio successfully entering RX mode
@@ -588,15 +660,23 @@ int main() {
 
     IoHomeFrame_t receivedFrame1;
     int16_t rx_result_success = ioHomeNode_tx_test.receiveFrame(receivedFrame1); // ioHomeNode_tx_test shares same mockPhy and channel
-    runTest("receiveFrame (success) - return code", rx_result_success == RADIOLIB_ERR_NONE);
+    runTest("receiveFrame (success) - return code", rx_result_success == RADIOLIB_ERR_NONE,
+            "Receive return code mismatch", rx_result_success, (int16_t)RADIOLIB_ERR_NONE);
     runTest("receiveFrame (success) - frame valid", receivedFrame1.isValid);
-    runTest("receiveFrame (success) - CTRL0", receivedFrame1.ctrlByte0 == valid_rx_frame[IOHOME_CTRLBYTE0_POS]);
+    runTest("receiveFrame (success) - CTRL0", receivedFrame1.ctrlByte0 == valid_rx_frame[IOHOME_CTRLBYTE0_POS],
+            "CTRL0 mismatch", receivedFrame1.ctrlByte0, valid_rx_frame[IOHOME_CTRLBYTE0_POS]);
     runTest("receiveFrame (success) - Payload", receivedFrame1.payload == valid_rx_payload);
-    runTest("receiveFrame (success) - frequency set", mockPhy.actualFrequencySet == (test_channel.c0 + test_channel.c1 / 100.0));
+    if (!(receivedFrame1.payload == valid_rx_payload)) {
+        printHexVector("    Expected payload", valid_rx_payload);
+        printHexVector("    Actual payload", receivedFrame1.payload);
+    }
+    runTest("receiveFrame (success) - frequency set", mockPhy.actualFrequencySet == (test_channel.c0 + test_channel.c1 / 100.0),
+            "Frequency set mismatch", mockPhy.actualFrequencySet, (test_channel.c0 + test_channel.c1 / 100.0));
 
     // Test case 27: Receive frame, but CRC is corrupted (parseFrame fails)
     std::vector<uint8_t> corrupted_rx_frame = valid_rx_frame;
     corrupted_rx_frame[corrupted_rx_frame.size() - 1] ^= 0x01; // Corrupt last byte of CRC
+    printHexVector("Corrupted RX Frame", corrupted_rx_frame);
     mockPhy.rxBufferInternal = corrupted_rx_frame;
     mockPhy.mockPacketLength = corrupted_rx_frame.size();
     mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
@@ -604,7 +684,8 @@ int main() {
 
     IoHomeFrame_t receivedFrame2;
     int16_t rx_result_corrupted_crc = ioHomeNode_tx_test.receiveFrame(receivedFrame2);
-    runTest("receiveFrame (corrupted CRC) - return code", rx_result_corrupted_crc == RADIOLIB_ERR_CRC_MISMATCH);
+    runTest("receiveFrame (corrupted CRC) - return code", rx_result_corrupted_crc == RADIOLIB_ERR_CRC_MISMATCH,
+            "Receive return code mismatch", rx_result_corrupted_crc, (int16_t)RADIOLIB_ERR_CRC_MISMATCH);
     runTest("receiveFrame (corrupted CRC) - frame invalid", !receivedFrame2.isValid);
 
     // Test case 28: Radio fails to start receive mode
@@ -615,7 +696,8 @@ int main() {
 
     IoHomeFrame_t receivedFrame3;
     int16_t rx_result_radio_fail = ioHomeNode_tx_test.receiveFrame(receivedFrame3);
-    runTest("receiveFrame (radio fail) - return code", rx_result_radio_fail == RADIOLIB_ERR_RX_TIMEOUT);
+    runTest("receiveFrame (radio fail) - return code", rx_result_radio_fail == RADIOLIB_ERR_RX_TIMEOUT,
+            "Receive return code mismatch", rx_result_radio_fail, (int16_t)RADIOLIB_ERR_RX_TIMEOUT);
     runTest("receiveFrame (radio fail) - frame invalid", !receivedFrame3.isValid);
 
     // Test case 29: Radio receives no packet (getPacketLength returns 0)
@@ -626,7 +708,8 @@ int main() {
 
     IoHomeFrame_t receivedFrame4;
     int16_t rx_result_no_packet = ioHomeNode_tx_test.receiveFrame(receivedFrame4);
-    runTest("receiveFrame (no packet) - return code", rx_result_no_packet == RADIOLIB_ERR_RX_TIMEOUT);
+    runTest("receiveFrame (no packet) - return code", rx_result_no_packet == RADIOLIB_ERR_RX_TIMEOUT,
+            "Receive return code mismatch", rx_result_no_packet, (int16_t)RADIOLIB_ERR_RX_TIMEOUT);
     runTest("receiveFrame (no packet) - frame invalid", !receivedFrame4.isValid);
 
     // Test case 30: ReadData fails after packet detected
@@ -637,11 +720,13 @@ int main() {
 
     IoHomeFrame_t receivedFrame5;
     int16_t rx_result_read_fail = ioHomeNode_tx_test.receiveFrame(receivedFrame5);
-    runTest("receiveFrame (read data fail) - return code", rx_result_read_fail == RADIOLIB_ERR_RX_TIMEOUT);
+    runTest("receiveFrame (read data fail) - return code", rx_result_read_fail == RADIOLIB_ERR_RX_TIMEOUT,
+            "Receive return code mismatch", rx_result_read_fail, (int16_t)RADIOLIB_ERR_RX_TIMEOUT);
     runTest("receiveFrame (read data fail) - frame invalid", !receivedFrame5.isValid);
 
     // Test case 31: Frame too short to be parsed as io-homecontrol (implicitly handled by parseFrame)
     std::vector<uint8_t> short_rx_frame = {0x01, 0x02}; // Much shorter than min frame len
+    printHexVector("Short RX Frame", short_rx_frame);
     mockPhy.rxBufferInternal = short_rx_frame;
     mockPhy.mockPacketLength = short_rx_frame.size();
     mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
@@ -649,7 +734,8 @@ int main() {
 
     IoHomeFrame_t receivedFrame6;
     int16_t rx_result_too_short = ioHomeNode_tx_test.receiveFrame(receivedFrame6);
-    runTest("receiveFrame (too short) - return code", rx_result_too_short == RADIOLIB_ERR_CRC_MISMATCH); // parseFrame returns false, which is mapped to CRC_MISMATCH
+    runTest("receiveFrame (too short) - return code", rx_result_too_short == RADIOLIB_ERR_CRC_MISMATCH, // parseFrame returns false, which is mapped to CRC_MISMATCH
+            "Receive return code mismatch", rx_result_too_short, (int16_t)RADIOLIB_ERR_CRC_MISMATCH);
     runTest("receiveFrame (too short) - frame invalid", !receivedFrame6.isValid);
 
 
