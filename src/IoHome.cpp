@@ -112,3 +112,58 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   return frame;
 }
 
+bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame) {
+    // Default to invalid and clear payload
+    parsedFrame.isValid = false;
+    parsedFrame.payload.clear();
+
+    // 1. Basic length check: must be at least header + cmd_id + CRC
+    if (frameLength < (IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + IOHOME_FRAME_CRC_LEN)) {
+        return false;
+    }
+
+    // 2. Validate CRC
+    if (!IoHomeNode::validateFrameCrc(frame, frameLength)) {
+        return false;
+    }
+
+    // Now that CRC is validated, proceed with parsing
+    size_t offset = 0;
+    parsedFrame.ctrlByte0 = frame[offset++];
+    parsedFrame.ctrlByte1 = frame[offset++];
+
+    parsedFrame.sourceMac.n0 = frame[offset++];
+    parsedFrame.sourceMac.n1 = frame[offset++];
+    parsedFrame.sourceMac.n2 = frame[offset++];
+
+    parsedFrame.destMac.n0 = frame[offset++];
+    parsedFrame.destMac.n1 = frame[offset++];
+    parsedFrame.destMac.n2 = frame[offset++];
+
+    parsedFrame.commandId = frame[offset++];
+
+    // Determine expected message body length from CTRLBYTE0 (excluding CRC)
+    size_t declared_msg_body_len = IOHOME_MSG_LEN(frame); // This is CTRL0 + ... + Payload
+    
+    // The actual data length covered by CRC should match the declared length
+    if (declared_msg_body_len != (frameLength - IOHOME_FRAME_CRC_LEN)) {
+        return false; // Inconsistent declared length
+    }
+
+    // Calculate payload length
+    size_t expected_payload_len = declared_msg_body_len - (IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN);
+
+    // Copy payload
+    if (expected_payload_len > 0) {
+        // Ensure there's enough data remaining in the frame for the declared payload
+        if (offset + expected_payload_len > frameLength - IOHOME_FRAME_CRC_LEN) {
+            return false; // Payload length exceeds available data before CRC
+        }
+        parsedFrame.payload.resize(expected_payload_len);
+        std::copy(frame + offset, frame + offset + expected_payload_len, parsedFrame.payload.begin());
+    }
+
+    parsedFrame.isValid = true; // Mark as valid after successful parsing
+    return true; // Parsing successful and CRC valid
+}
+

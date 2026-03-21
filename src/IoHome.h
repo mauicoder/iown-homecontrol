@@ -76,6 +76,20 @@ struct IoHomeChannel_t {
 };
 
 /*!
+  \struct IoHomeFrame_t
+  \brief Structure to hold parsed io-homecontrol frame data.
+*/
+struct IoHomeFrame_t {
+  uint8_t ctrlByte0;
+  uint8_t ctrlByte1;
+  NodeId sourceMac;
+  NodeId destMac;
+  uint8_t commandId;
+  std::vector<uint8_t> payload;
+  bool isValid; // Indicates if the frame was successfully parsed and CRC validated
+};
+
+/*!
   \class IoHomeNode
   \brief io-homecontrol node.
 */
@@ -167,6 +181,15 @@ class IoHomeNode {
       uint8_t commandId,
       const std::vector<uint8_t>& payload
     );
+
+    /*!
+      \brief Parses an io-homecontrol frame and validates its CRC.
+      \param frame Pointer to the raw io-homecontrol frame data.
+      \param frameLength The total length of the raw frame data.
+      \param parsedFrame Reference to an IoHomeFrame_t struct to populate with parsed data.
+      \returns True if the frame was successfully parsed and its CRC is valid, false otherwise.
+    */
+    static bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
 };
 
 #endif

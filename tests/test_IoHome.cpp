@@ -202,5 +202,67 @@ int main() {
 
     std::cout << "All IoHomeNode Frame Building tests completed." << std::endl;
 
+    std::cout << "\nStarting IoHomeNode Frame Parsing tests..." << std::endl;
+
+    IoHomeFrame_t parsed_frame;
+
+    // Test case 18: Parse a valid frame with no payload
+    std::vector<uint8_t> parsed_frame_no_payload = IoHomeNode::buildFrame(
+      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, no_payload_vec
+    );
+    bool parse_result_no_payload = IoHomeNode::parseFrame(parsed_frame_no_payload.data(), parsed_frame_no_payload.size(), parsed_frame);
+    runTest("parseFrame (no payload) - overall result", parse_result_no_payload);
+    runTest("parseFrame (no payload) - isValid flag", parsed_frame.isValid);
+    runTest("parseFrame (no payload) - CTRL0", parsed_frame.ctrlByte0 == parsed_frame_no_payload[IOHOME_CTRLBYTE0_POS]);
+    runTest("parseFrame (no payload) - CTRL1", parsed_frame.ctrlByte1 == test_ctrl1);
+    runTest("parseFrame (no payload) - SRC_MAC[0]", parsed_frame.sourceMac.n0 == test_src_mac.n0);
+    runTest("parseFrame (no payload) - DEST_MAC[0]", parsed_frame.destMac.n0 == test_dest_mac.n0);
+    runTest("parseFrame (no payload) - CMD_ID", parsed_frame.commandId == test_cmd_id);
+    runTest("parseFrame (no payload) - Payload size", parsed_frame.payload.empty());
+
+    // Test case 19: Parse a valid frame with a small payload
+    std::vector<uint8_t> parsed_frame_small_payload = IoHomeNode::buildFrame(
+      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, small_payload_vec
+    );
+    bool parse_result_small_payload = IoHomeNode::parseFrame(parsed_frame_small_payload.data(), parsed_frame_small_payload.size(), parsed_frame);
+    runTest("parseFrame (small payload) - overall result", parse_result_small_payload);
+    runTest("parseFrame (small payload) - isValid flag", parsed_frame.isValid);
+    runTest("parseFrame (small payload) - Payload size", parsed_frame.payload.size() == small_payload_vec.size());
+    runTest("parseFrame (small payload) - Payload content", parsed_frame.payload == small_payload_vec);
+
+    // Test case 20: Parse a valid frame with maximum payload
+    std::vector<uint8_t> parsed_frame_max_payload = IoHomeNode::buildFrame(
+      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, max_payload_vec
+    );
+    bool parse_result_max_payload = IoHomeNode::parseFrame(parsed_frame_max_payload.data(), parsed_frame_max_payload.size(), parsed_frame);
+    runTest("parseFrame (max payload) - overall result", parse_result_max_payload);
+    runTest("parseFrame (max payload) - isValid flag", parsed_frame.isValid);
+    runTest("parseFrame (max payload) - Payload size", parsed_frame.payload.size() == max_payload_vec.size());
+    runTest("parseFrame (max payload) - Payload content", parsed_frame.payload == max_payload_vec);
+
+    // Test case 21: Parse a frame with corrupted CRC
+    std::vector<uint8_t> corrupted_crc_frame = parsed_frame_small_payload;
+    corrupted_crc_frame[corrupted_crc_frame.size() - 1] ^= 0x01; // Corrupt last byte of CRC
+    bool parse_result_corrupted_crc = IoHomeNode::parseFrame(corrupted_crc_frame.data(), corrupted_crc_frame.size(), parsed_frame);
+    runTest("parseFrame (corrupted CRC) - overall result", !parse_result_corrupted_crc);
+    runTest("parseFrame (corrupted CRC) - isValid flag", !parsed_frame.isValid);
+
+    // Test case 22: Parse a frame that is too short (less than min header + cmd + CRC)
+    std::vector<uint8_t> too_short_frame = {0x01, 0x02, 0x03, 0x04}; // Arbitrary short data
+    bool parse_result_too_short = IoHomeNode::parseFrame(too_short_frame.data(), too_short_frame.size(), parsed_frame);
+    runTest("parseFrame (too short) - overall result", !parse_result_too_short);
+    runTest("parseFrame (too short) - isValid flag", !parsed_frame.isValid);
+    
+    // Test case 23: Parse a frame where declared length doesn't match actual data length (after CRC check)
+    // This creates a valid CRC but internal length is inconsistent.
+    std::vector<uint8_t> inconsistent_len_frame = parsed_frame_small_payload;
+    inconsistent_len_frame[IOHOME_CTRLBYTE0_POS] = (inconsistent_len_frame[IOHOME_CTRLBYTE0_POS] & ~0x1F) | (0x02 - 1); // Declares length of 2, but frame has more
+    bool parse_result_inconsistent_len = IoHomeNode::parseFrame(inconsistent_len_frame.data(), inconsistent_len_frame.size(), parsed_frame);
+    runTest("parseFrame (inconsistent declared length) - overall result", !parse_result_inconsistent_len);
+    runTest("parseFrame (inconsistent declared length) - isValid flag", !parsed_frame.isValid);
+
+
+    std::cout << "All IoHomeNode Frame Parsing tests completed." << std::endl;
+
     return 0;
 }
