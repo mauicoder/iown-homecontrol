@@ -397,7 +397,7 @@ int main() {
     std::cout << "\nStarting IoHomeNode Transmit tests..." << std::endl;
 
     MockPhysicalLayer mockPhy;
-    IoHomeChannel_t test_channel = {(uint8_t)868, 95}; // e.g., 868.95 MHz // Explicit cast to uint8_t
+    IoHomeChannel_t test_channel = {868, 95}; // e.g., 868.95 MHz
     IoHomeNode ioHomeNode_tx_test(&mockPhy, &test_channel);
 
     // Test case 24: Transmit a valid frame (successful scenario)
