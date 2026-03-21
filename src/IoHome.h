@@ -71,7 +71,7 @@ struct NodeId {
 };
 
 struct IoHomeChannel_t {
-  uint8_t c0;
+  uint16_t c0;
   uint8_t c1;
 };
 
