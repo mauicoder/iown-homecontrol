@@ -97,7 +97,7 @@ class IoHomeNode {
     int16_t setPhyProperties();
 
     // crc16-kermit that takes a uint8_t array of even length and calculates the checksum
-    static uint16_t crc16();
+    static uint16_t crc16(const uint8_t* data, size_t length);
 
     // network-to-host conversion method - takes data from network packet and converts it to the host endians
     template<typename T>
