@@ -8,12 +8,13 @@
 #include "IoHome.h"
 #include <RadioLib.h> // Explicitly include for RadioLib error codes
 
-// Provide a default constructor and virtual destructor for PhysicalLayer for the test environment
+// Provide a default constructor for PhysicalLayer for the test environment.
+// The destructor should not be defined if it's explicitly defaulted in the base class.
 // This is a workaround for the linker error "Undefined symbols for architecture x86_64: "PhysicalLayer::PhysicalLayer()""
 // when not linking the full RadioLib library during unit testing.
 #if !defined(ARDUINO)
 PhysicalLayer::PhysicalLayer() {}
-PhysicalLayer::~PhysicalLayer() {}
+// PhysicalLayer::~PhysicalLayer() {} // Removed: This was causing "definition of explicitly defaulted destructor" error
 #endif
 
 // Define missing RadioLib constants for testing environment if not pulled in
