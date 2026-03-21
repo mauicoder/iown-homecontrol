@@ -3,9 +3,8 @@
 #include "TypeDef.h"
 #include "protocols/PhysicalLayer/PhysicalLayer.h"
 
-IoHomeNode::IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel) {
-  this->phyLayer = phy;
-  // this->channel = channel;
+IoHomeNode::IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel_param)
+  : phyLayer(phy), channel(channel_param) {
 }
 
 void IoHomeNode::begin(const IoHomeChannel_t* channel, NodeId source_node_id, NodeId destination_node_id, uint8_t* stack_key, uint8_t* system_key) {}
@@ -63,20 +62,3 @@ uint16_t IoHomeNode::crc16(const uint8_t* data, size_t length) {
   return crc;
 }
 
-template<typename T>
-T IoHomeNode::ntoh(uint8_t* buff, size_t size) {
-  uint8_t* buffPtr = buff;
-  size_t targetSize = sizeof(T);
-  if(size != 0) {targetSize = size;}
-  T res = 0;
-  for(size_t i = 0; i < targetSize; i++) {res |= (uint32_t)(*(buffPtr++)) << 8*i;}
-  return(res);
-}
-
-template<typename T>
-void IoHomeNode::hton(uint8_t* buff, T val, size_t size) {
-  uint8_t* buffPtr = buff;
-  size_t targetSize = sizeof(T);
-  if(size != 0) {targetSize = size;}
-  for(size_t i = 0; i < targetSize; i++) {*(buffPtr++) = val >> 8*i;}
-}

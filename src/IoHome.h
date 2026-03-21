@@ -91,7 +91,7 @@ class IoHomeNode {
     void begin(const IoHomeChannel_t* channel, NodeId source_node_id, NodeId destination_node_id, uint8_t* stack_key, uint8_t* system_key);
 
     PhysicalLayer* phyLayer = NULL;
-    const IoHomeChannel_t* channel = NULL;
+    const IoHomeChannel_t* channel; // Const member pointer, must be initialized in constructor
 
     // configure common physical layer properties (preamble, sync word etc.)
     int16_t setPhyProperties();
@@ -101,11 +101,23 @@ class IoHomeNode {
 
     // network-to-host conversion method - takes data from network packet and converts it to the host endians
     template<typename T>
-    static T ntoh(uint8_t* buff, size_t size = 0);
+    static T ntoh(uint8_t* buff, size_t size = 0) {
+      uint8_t* buffPtr = buff;
+      size_t targetSize = sizeof(T);
+      if(size != 0) {targetSize = size;}
+      T res = 0;
+      for(size_t i = 0; i < targetSize; i++) {res |= (uint32_t)(*(buffPtr++)) << 8*i;}
+      return(res);
+    }
 
     // host-to-network conversion method - takes data from host variable and and converts it to network packet endians
     template<typename T>
-    static void hton(uint8_t* buff, T val, size_t size = 0);
+    static void hton(uint8_t* buff, T val, size_t size = 0) {
+      uint8_t* buffPtr = buff;
+      size_t targetSize = sizeof(T);
+      if(size != 0) {targetSize = size;}
+      for(size_t i = 0; i < targetSize; i++) {*(buffPtr++) = val >> 8*i;}
+    }
 };
 
 #endif
