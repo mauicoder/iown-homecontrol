@@ -8,8 +8,9 @@
 #include "IoHome.h"
 #include <RadioLib.h> // Explicitly include for RadioLib error codes
 
-// No need for a global PhysicalLayer constructor or standby implementation for testing.
-// The MockPhysicalLayer will handle all virtual functions.
+// Provide a definition for the PhysicalLayer base class constructor for the test environment.
+// This is required since MockPhysicalLayer explicitly calls it.
+PhysicalLayer::PhysicalLayer() : freqStep(0.0), maxPacketLength(0) {}
 
 // Define missing RadioLib constants for testing environment if not pulled in
 #ifndef RADIOLIB_NO_IRQ
