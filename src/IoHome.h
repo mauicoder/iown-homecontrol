@@ -25,7 +25,9 @@
 #define IOHOME_CTRLBYTE1_POS                (0x1)
 #define IOHOME_MAC_SOURCE_POS               (0x2)
 #define IOHOME_MAC_DEST_POS                 (0x3)
-#define IOHOME_MSG_LEN(MSG)                 (/* TODO get msg len*/)
+#define IOHOME_MSG_LEN(MSG)                 ((MSG[IOHOME_CTRLBYTE0_POS] & 0x1F) + 1) // +1 for the control byte itself
+#define IOHOME_FRAME_CRC_LEN                (2) // CRC-16 is 2 bytes long
+#define IOHOME_FRAME_CRC_POS(FRAME_LEN)     ((FRAME_LEN) - IOHOME_FRAME_CRC_LEN)
 #define IOHOME_NUM_COMMANDS                 (2)
 #define IOHOME_CMD_0x00                     (0x00)
 #define IOHOME_CMD_0x01                     (0x01)
@@ -117,6 +119,26 @@ class IoHomeNode {
       size_t targetSize = sizeof(T);
       if(size != 0) {targetSize = size;}
       for(size_t i = 0; i < targetSize; i++) {*(buffPtr++) = val >> 8*i;}
+    }
+
+    /*!
+      \brief Validates the CRC-16 of an io-homecontrol frame.
+      \param frame Pointer to the complete io-homecontrol frame (including CRC).
+      \param frameLength The total length of the frame in bytes.
+      \returns True if the calculated CRC matches the CRC in the frame, false otherwise.
+    */
+    static bool validateFrameCrc(const uint8_t* frame, size_t frameLength) {
+      if (frameLength < IOHOME_FRAME_CRC_LEN) {
+        return false; // Frame too short to even contain a CRC
+      }
+
+      // Calculate CRC over the data portion (excluding the 2 CRC bytes at the end)
+      uint16_t calculatedCrc = IoHomeNode::crc16(frame, IOHOME_FRAME_CRC_POS(frameLength));
+
+      // Extract the received CRC from the end of the frame
+      uint16_t receivedCrc = IoHomeNode::ntoh<uint16_t>((uint8_t*)frame + IOHOME_FRAME_CRC_POS(frameLength));
+
+      return calculatedCrc == receivedCrc;
     }
 };
 
