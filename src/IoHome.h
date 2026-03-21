@@ -31,6 +31,12 @@
 #define IOHOME_NUM_COMMANDS                 (2)
 #define IOHOME_CMD_0x00                     (0x00)
 #define IOHOME_CMD_0x01                     (0x01)
+
+// Frame building constants
+#define IOHOME_FRAME_HEADER_CORE_LEN        (1 + 1) // CTRL0 + CTRL1
+#define IOHOME_FRAME_MAC_LEN                (3)
+#define IOHOME_FRAME_HEADER_LEN             (IOHOME_FRAME_HEADER_CORE_LEN + 2 * IOHOME_FRAME_MAC_LEN) // CTRL0, CTRL1, SRC_MAC (3), DEST_MAC (3) = 8 bytes
+#define IOHOME_COMMAND_ID_LEN               (1)
 #pragma endregion CONST
 
 /*!
@@ -140,6 +146,25 @@ class IoHomeNode {
 
       return calculatedCrc == receivedCrc;
     }
+
+    /*!
+      \brief Builds a complete io-homecontrol frame including CRC-16.
+      \param ctrlByte0 The first control byte. The length field in this byte will be overwritten by the actual message body length.
+      \param ctrlByte1 The second control byte.
+      \param sourceMac The source node ID.
+      \param destMac The destination node ID.
+      \param commandId The command ID.
+      \param payload The message payload.
+      \returns A std::vector<uint8_t> containing the complete frame.
+    */
+    static std::vector<uint8_t> buildFrame(
+      uint8_t ctrlByte0,
+      uint8_t ctrlByte1,
+      NodeId sourceMac,
+      NodeId destMac,
+      uint8_t commandId,
+      const std::vector<uint8_t>& payload
+    );
 };
 
 #endif

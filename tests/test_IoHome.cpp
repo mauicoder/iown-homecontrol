@@ -138,5 +138,69 @@ int main() {
 
     std::cout << "All IoHomeNode CRC16 tests completed." << std::endl;
 
+    std::cout << "\nStarting IoHomeNode Frame Building tests..." << std::endl;
+
+    // Common test data for buildFrame tests
+    uint8_t test_ctrl0_base = IOHOME_CTRLBYTE0_MODE_TWOWAY | IOHOME_CTRLBYTE0_ORDER_0; // Length bits will be set by buildFrame
+    uint8_t test_ctrl1 = 0xAA;
+    NodeId test_src_mac = {0x11, 0x22, 0x33};
+    NodeId test_dest_mac = {0x44, 0x55, 0x66};
+    uint8_t test_cmd_id = 0x01;
+
+    // Test case 15: Build frame with no payload
+    std::vector<uint8_t> no_payload_vec = {};
+    std::vector<uint8_t> frame_no_payload = IoHomeNode::buildFrame(
+      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, no_payload_vec
+    );
+    size_t expected_message_body_len_no_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN; // 8 + 1 = 9
+    size_t expected_total_frame_len_no_payload = expected_message_body_len_no_payload + IOHOME_FRAME_CRC_LEN; // 9 + 2 = 11
+
+    runTest("buildFrame (no payload) - total length", frame_no_payload.size() == expected_total_frame_len_no_payload);
+    runTest("buildFrame (no payload) - CRC valid", IoHomeNode::validateFrameCrc(frame_no_payload.data(), frame_no_payload.size()));
+    // Verify specific bytes
+    runTest("buildFrame (no payload) - CTRL0 length bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_no_payload - 1)); // 9 - 1 = 8
+    runTest("buildFrame (no payload) - CTRL0 mode/order bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & ~0x1F) == test_ctrl0_base);
+    runTest("buildFrame (no payload) - CTRL1", frame_no_payload[IOHOME_CTRLBYTE1_POS] == test_ctrl1);
+    runTest("buildFrame (no payload) - SRC_MAC[0]", frame_no_payload[IOHOME_MAC_SOURCE_POS] == test_src_mac.n0);
+    runTest("buildFrame (no payload) - DEST_MAC[0]", frame_no_payload[IOHOME_MAC_DEST_POS] == test_dest_mac.n0);
+    runTest("buildFrame (no payload) - CMD_ID", frame_no_payload[IOHOME_FRAME_HEADER_LEN] == test_cmd_id);
+
+
+    // Test case 16: Build frame with a small payload
+    std::vector<uint8_t> small_payload_vec = {0xA0, 0xB1, 0xC2}; // 3 bytes
+    std::vector<uint8_t> frame_small_payload = IoHomeNode::buildFrame(
+      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, small_payload_vec
+    );
+    size_t expected_message_body_len_small_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + small_payload_vec.size(); // 8 + 1 + 3 = 12
+    size_t expected_total_frame_len_small_payload = expected_message_body_len_small_payload + IOHOME_FRAME_CRC_LEN; // 12 + 2 = 14
+
+    runTest("buildFrame (small payload) - total length", frame_small_payload.size() == expected_total_frame_len_small_payload);
+    runTest("buildFrame (small payload) - CRC valid", IoHomeNode::validateFrameCrc(frame_small_payload.data(), frame_small_payload.size()));
+    // Verify specific bytes
+    runTest("buildFrame (small payload) - CTRL0 length bits", (frame_small_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_small_payload - 1)); // 12 - 1 = 11
+    runTest("buildFrame (small payload) - Payload[0]", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN] == 0xA0);
+    runTest("buildFrame (small payload) - Payload[2]", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + 2] == 0xC2);
+
+    // Test case 17: Build frame with maximum possible payload length
+    // The length field in CTRLBYTE0 is 5 bits, so max value is 31 (0x1F).
+    // This means max messageBodyLen = 31 + 1 = 32 bytes.
+    // messageBodyLen = IOHOME_FRAME_HEADER_LEN (8) + IOHOME_COMMAND_ID_LEN (1) + payload.size()
+    // 32 = 8 + 1 + payload.size() => payload.size() = 23
+    size_t max_payload_size = 23;
+    std::vector<uint8_t> max_payload_vec(max_payload_size, 0xDE); // Max payload 23 bytes
+    std::vector<uint8_t> frame_max_payload = IoHomeNode::buildFrame(
+      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, max_payload_vec
+    );
+    size_t expected_message_body_len_max_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + max_payload_size; // 8 + 1 + 23 = 32
+    size_t expected_total_frame_len_max_payload = expected_message_body_len_max_payload + IOHOME_FRAME_CRC_LEN; // 32 + 2 = 34
+
+    runTest("buildFrame (max payload) - total length", frame_max_payload.size() == expected_total_frame_len_max_payload);
+    runTest("buildFrame (max payload) - CRC valid", IoHomeNode::validateFrameCrc(frame_max_payload.data(), frame_max_payload.size()));
+    runTest("buildFrame (max payload) - CTRL0 length bits", (frame_max_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_max_payload - 1)); // 32 - 1 = 31 = 0x1F
+    runTest("buildFrame (max payload) - Payload[0]", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN] == 0xDE);
+    runTest("buildFrame (max payload) - Last Payload byte", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + max_payload_size - 1] == 0xDE);
+
+    std::cout << "All IoHomeNode Frame Building tests completed." << std::endl;
+
     return 0;
 }

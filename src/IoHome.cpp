@@ -62,3 +62,53 @@ uint16_t IoHomeNode::crc16(const uint8_t* data, size_t length) {
   return crc;
 }
 
+std::vector<uint8_t> IoHomeNode::buildFrame(
+  uint8_t ctrlByte0,
+  uint8_t ctrlByte1,
+  NodeId sourceMac,
+  NodeId destMac,
+  uint8_t commandId,
+  const std::vector<uint8_t>& payload
+) {
+  // Calculate the total length of the message body (data to be CRC'd)
+  // This includes CTRL0, CTRL1, Source MAC, Dest MAC, Command ID, and Payload
+  size_t messageBodyLen = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + payload.size();
+  
+  // The length field in CTRLBYTE0 is (messageBodyLen - 1)
+  // Mask out existing length bits and set new ones
+  uint8_t finalCtrlByte0 = (ctrlByte0 & ~0x1F) | (messageBodyLen - 1);
+
+  // Initialize frame with space for message body + CRC
+  std::vector<uint8_t> frame(messageBodyLen);
+
+  size_t offset = 0;
+  frame[offset++] = finalCtrlByte0;
+  frame[offset++] = ctrlByte1;
+
+  frame[offset++] = sourceMac.n0;
+  frame[offset++] = sourceMac.n1;
+  frame[offset++] = sourceMac.n2;
+
+  frame[offset++] = destMac.n0;
+  frame[offset++] = destMac.n1;
+  frame[offset++] = destMac.n2;
+
+  frame[offset++] = commandId;
+
+  // Copy payload if present
+  if (!payload.empty()) {
+    std::copy(payload.begin(), payload.end(), frame.begin() + offset);
+    offset += payload.size();
+  }
+
+  // Calculate CRC over the assembled message body
+  uint16_t calculatedCrc = IoHomeNode::crc16(frame.data(), messageBodyLen);
+
+  // Append CRC to the frame (resize the vector first)
+  frame.resize(messageBodyLen + IOHOME_FRAME_CRC_LEN);
+  // Use hton to place the 16-bit CRC into the frame at the correct offset
+  IoHomeNode::hton<uint16_t>(frame.data() + offset, calculatedCrc);
+
+  return frame;
+}
+
