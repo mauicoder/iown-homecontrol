@@ -81,6 +81,15 @@ int main() {
     std::vector<uint8_t> data9 = {0x55, 0xAA, 0x55, 0xAA};
     uint16_t expected_crc9 = 0x70F1; // Calculated with CRC-16/KERMIT
     uint16_t actual_crc9 = IoHomeNode::crc16(data9.data(), data9.size());
+
+    // Debugging output for Alternating 0x55/0xAA bytes test
+    if (actual_crc9 != expected_crc9) {
+        std::cout << "DEBUG: For 'Alternating 0x55/0xAA bytes', expected CRC: 0x"
+                  << std::hex << std::setw(4) << std::setfill('0') << expected_crc9
+                  << ", actual CRC: 0x"
+                  << std::hex << std::setw(4) << std::setfill('0') << actual_crc9 << std::endl;
+    }
+    std::cout << std::dec; // Reset to decimal for subsequent output
     runTest("Alternating 0x55/0xAA bytes", actual_crc9 == expected_crc9);
 
     // Test case 10: Longer string "The quick brown fox jumps over the lazy dog."
