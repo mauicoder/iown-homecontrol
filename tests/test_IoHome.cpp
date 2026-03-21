@@ -285,7 +285,7 @@ int main() {
 
         // Dummy implementations for other pure virtual methods from PhysicalLayer
         // These are not directly used by IoHomeNode::transmitFrame but are required by the abstract base class
-        int16_t begin(float freq, float bw, uint8_t sf, uint8_t cr, uint8_t syncWord, int8_t pwr, uint16_t preamble, float tcxoVoltage, bool use and float tempCoeff) override { return RADIOLIB_ERR_NONE; }
+        int16_t begin(float freq, float bw, uint8_t sf, uint8_t cr, uint8_t syncWord, int8_t pwr, uint16_t preamble, float tcxoVoltage, bool use, float tempCoeff) override { return RADIOLIB_ERR_NONE; }
         int16_t beginFSK(float freq, float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, int8_t pwr, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; }
         int16_t end() override { return RADIOLIB_ERR_NONE; }
         int16_t setOutputPower(int8_t power) override { return RADIOLIB_ERR_NONE; }
