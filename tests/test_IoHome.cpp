@@ -309,23 +309,27 @@ int main() {
             return RADIOLIB_ERR_NONE;
         }
 
-        // Minimal dummy implementations for other pure virtual methods required to make MockPhysicalLayer concrete.
-        // Removed 'override' from functions that are not virtual in the base class or do not match signature.
-        // For actual virtual methods, ensured signatures match.
-        int16_t begin(float freq, float bw, uint8_t sf, uint8_t cr, uint8_t syncWord, int8_t pwr, uint16_t preamble, float tcxoVoltage, bool use, float tempCoeff) { return RADIOLIB_ERR_NONE; }
-        int16_t beginFSK(float freq, float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, int8_t pwr, uint16_t preambleLen, bool enableOOK) { return RADIOLIB_ERR_NONE; }
+        // Minimal dummy implementations for other pure virtual methods needed to make MockPhysicalLayer concrete ---
+        // Ensure only actual virtual methods use 'override' and match signature.
+        // For convenience overloads that are not virtual in base, remove 'override'.
+        int16_t begin(float freq, float bw, uint8_t sf, uint8_t cr, uint8_t syncWord, int8_t pwr, uint16_t preamble, float tcxoVoltage, bool use, float tempCoeff) override { return RADIOLIB_ERR_NONE; }
+        int16_t beginFSK(float freq, float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, int8_t pwr, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; }
         int16_t end() override { return RADIOLIB_ERR_NONE; } // This is virtual in PhysicalLayer
         int16_t setOutputPower(int8_t power) override { return RADIOLIB_ERR_NONE; } // This is virtual
         int16_t configFSK(float br, float freqDev, float rxBw, uint8_t syncWordLen, uint8_t* syncWord, uint16_t preambleLen, bool enableOOK) override { return RADIOLIB_ERR_NONE; } // This is virtual
-        int16_t startReceive(uint32_t timeout, uint32_t channel) override { return RADIOLIB_ERR_NONE; } // This specific overload is virtual
-        int16_t readData(uint8_t* data, size_t len, size_t offset) { return RADIOLIB_ERR_NONE; }
-        int16_t readData(std::string& str) { return RADIOLIB_ERR_NONE; }
-        int16_t readData(std::string& str, size_t len) { return RADIOLIB_ERR_NONE; }
-        int16_t readData(std::string& str, size_t len, size_t offset) { return RADIOLIB_ERR_NONE; }
-        int16_t startTransmit(const std::string& str, uint32_t timeout, uint32_t channel) { return RADIOLIB_ERR_NONE; }
-        int16_t startTransmit(const std::string& str) { return RADIOLIB_ERR_NONE; }
+        // The PhysicalLayer base class has a startReceive overload:
+        // virtual int16_t startReceive(uint32_t timeout, RadioLibIrqFlags_t irqFlags = ..., RadioLibIrqFlags_t irqMask = ..., size_t len = 0);
+        // The mock's startReceive(uint32_t timeout, uint32_t channel) is an overload but does not match this, so 'override' must be removed.
+        int16_t startReceive(uint32_t timeout, uint32_t channel) { return RADIOLIB_ERR_NONE; }
+        int16_t readData(uint8_t* data, size_t len, size_t offset) { return RADIOLIB_ERR_NONE; } // Not virtual in base with this signature
+        int16_t readData(std::string& str) { return RADIOLIB_ERR_NONE; } // Not virtual in base with this signature
+        int16_t readData(std::string& str, size_t len) { return RADIOLIB_ERR_NONE; } // Not virtual in base with this signature
+        int16_t readData(std::string& str, size_t len, size_t offset) { return RADIOLIB_ERR_NONE; } // Not virtual in base with this signature
+        int16_t startTransmit(const std::string& str, uint32_t timeout, uint32_t channel) { return RADIOLIB_ERR_NONE; } // Not virtual in base with this signature
+        int16_t startTransmit(const std::string& str) { return RADIOLIB_ERR_NONE; } // Not virtual in base with this signature
         float getSNR() override { return 0.0; } // This is virtual
-        float getRSSI(bool actual = false) { return 0.0; } // Base PhysicalLayer has getRSSI() (no params) as virtual. This overload might not be.
+        // Base PhysicalLayer has getRSSI() (no params) as virtual. This overload is not.
+        float getRSSI(bool actual = false) { return 0.0; } 
         size_t getPacketLength() const override { return 0; } // This const version is virtual
         int16_t fixedPacketLengthMode(size_t len) override { return RADIOLIB_ERR_NONE; } // This is virtual
         int16_t variablePacketLengthMode() override { return RADIOLIB_ERR_NONE; } // This is virtual
@@ -347,12 +351,17 @@ int main() {
         int16_t startDirect() override { return RADIOLIB_ERR_NONE; } // This is virtual
         int16_t readRssiDirect() override { return RADIOLIB_ERR_NONE; }
 
+        // Implementation for the pure virtual method getMod()
+        Module* getMod() override {
+            return nullptr; // Return nullptr for mock, as no actual module is present
+        }
+
     };
 
     std::cout << "\nStarting IoHomeNode Transmit tests..." << std::endl;
 
     MockPhysicalLayer mockPhy;
-    IoHomeChannel_t test_channel = {868, 95}; // e.g., 868.95 MHz
+    IoHomeChannel_t test_channel = {(uint8_t)868, 95}; // e.g., 868.95 MHz // Explicit cast to uint8_t
     IoHomeNode ioHomeNode_tx_test(&mockPhy, &test_channel);
 
     // Test case 24: Transmit a valid frame (successful scenario)
