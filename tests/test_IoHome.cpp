@@ -7,6 +7,14 @@
 #include "IoHome.h"
 #include <RadioLib.h> // Explicitly include for RadioLib error codes
 
+// Define missing RadioLib constants for testing environment if not pulled in
+#ifndef RADIOLIB_NO_IRQ
+#define RADIOLIB_NO_IRQ 0U
+#endif
+#ifndef RADIOLIB_IRQ_ALL
+#define RADIOLIB_IRQ_ALL 0xFFFFFFFFU // A common full mask
+#endif
+
 // Helper function to print test results
 void runTest(const std::string& testName, bool condition) {
     std::cout << "Running test: " << testName << " - ";
