@@ -7,7 +7,13 @@ IoHomeNode::IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel_param)
   : phyLayer(phy), channel(channel_param) {
 }
 
-void IoHomeNode::begin(const IoHomeChannel_t* channel, NodeId source_node_id, NodeId destination_node_id, uint8_t* stack_key, uint8_t* system_key) {}
+void IoHomeNode::begin(const IoHomeChannel_t* channel, NodeId source_node_id, NodeId destination_node_id, uint8_t* stack_key, uint8_t* system_key) {
+  (void)channel;
+  (void)source_node_id;
+  (void)destination_node_id;
+  (void)stack_key;
+  (void)system_key;
+}
 
 int16_t IoHomeNode::setPhyProperties() {
 
