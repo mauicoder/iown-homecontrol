@@ -401,3 +401,32 @@ int16_t IoHomeNode::receiveFrame(IoHomeFrame_t& receivedFrame) {
 #endif
     return RADIOLIB_ERR_NONE;
 }
+
+int16_t IoHomeNode::sendWink(NodeId targetMac) {
+    // 0x10 = Standard 1-way / 2-way control bits (adjust as needed)
+    // 0x01 = Specific control flags
+    uint8_t ctrl0 = 0x10;
+    uint8_t ctrl1 = 0x01;
+    uint8_t commandId = 0x20; // The "Wink" Command
+
+    // Empty payload for a standard Wink
+    std::vector<uint8_t> emptyPayload;
+
+    // Generate the cryptographically signed frame
+    std::vector<uint8_t> frame = this->buildFrame(
+        ctrl0,
+        ctrl1,
+        this->_source_node_id,
+        targetMac,
+        commandId,
+        emptyPayload
+    );
+
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+    Serial.printf("[IoHomeNode] Sending WINK to %02X%02X%02X\n",
+                  targetMac.n0, targetMac.n1, targetMac.n2);
+#endif
+
+    // Send it over the radio
+    return this->transmitFrame(frame);
+}

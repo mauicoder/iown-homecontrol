@@ -126,6 +126,9 @@ class IoHomeNode {
 
     bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
 
+    // Commands
+    int16_t sendWink(NodeId targetMac);
+
     // Template helpers (Must be in header)
     template<typename T>
     static T ntoh(uint8_t* buff, size_t size = 0) {

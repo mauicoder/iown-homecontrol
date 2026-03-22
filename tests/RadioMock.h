@@ -24,6 +24,7 @@ public:
     float actualFrequencySet = 0.0;
     std::vector<uint8_t> rxBufferInternal;
     size_t mockPacketLength = 0; // Length reported by getPacketLength
+    std::vector<uint8_t> lastSentPacket;
 
     // Constructor
     MockPhysicalLayer() : PhysicalLayer() {}
@@ -37,8 +38,11 @@ public:
     }
 
     int16_t startTransmit(const uint8_t* data, size_t len, uint8_t addr = 0) override {
-        (void)data; (void)len; (void)addr; // Suppress unused parameter warnings
-        return startTransmitResult;
+      (void)addr;
+      if (data != nullptr && len > 0) {
+          lastSentPacket.assign(data, data + len);
+      }
+      return startTransmitResult;
     }
 
     int16_t startReceive() override {

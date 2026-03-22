@@ -484,19 +484,20 @@ void runRadioReceiveTests() {
 void runCounterIncrementTests() {
     std::cout << "\nStarting Counter Increment tests..." << std::endl;
     IoHomeTestFixture fx;
+    NodeId target = {0xDE, 0xAD, 0xBE};
 
-    // Frame 1
-    auto f1 = fx.node.buildFrame(fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, {});
-    size_t off1 = f1.size() - 10; // 2 (CRC) + 6 (MAC) + 2 (Counter)
-    uint16_t c1 = (f1[off1] << 8) | f1[off1 + 1];
+    // Frame 1 via high-level command
+    fx.node.sendWink(target);
+    auto& f1 = fx.mockPhy.lastSentPacket;
+    uint16_t c1 = (f1[9] << 8) | f1[10]; // Byte 9 & 10 are the counter
 
-    // Frame 2
-    auto f2 = fx.node.buildFrame(fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, {});
-    size_t off2 = f2.size() - 10;
-    uint16_t c2 = (f2[off2] << 8) | f2[off2 + 1];
+    // Frame 2 via high-level command
+    fx.node.sendWink(target);
+    auto& f2 = fx.mockPhy.lastSentPacket;
+    uint16_t c2 = (f2[9] << 8) | f2[10];
 
-    runTest("Counter increments: 0 to 1", (c1 == 0 && c2 == 1),
-            "Counter jump mismatch", c2, 1);
+    runTest("Counter increments: 0 to 1 via sendWink", (c1 == 0 && c2 == 1),
+            "Counter jump mismatch in radio buffer", c2, 1);
 
     std::cout << "Counter Increment tests completed." << std::endl;
 }
@@ -547,6 +548,31 @@ void testCaseSecurityTamper() {
     runTest("parseFrame - isValid is false on tamper", parsed.isValid == false);
 }
 
+void testCaseSendWink() {
+    IoHomeTestFixture fx;
+    NodeId target = {0xDE, 0xAD, 0xBE};
+
+    // 1. Trigger the command
+    int16_t status = fx.node.sendWink(target);
+
+    // 2. Check return status
+    runTest("sendWink - returns success (0)", status == 0);
+
+    // 3. Inspect the captured packet
+    auto& sent = fx.mockPhy.lastSentPacket;
+
+    runTest("sendWink - packet was captured by mock", sent.size() > 0);
+
+    if (sent.size() > 8) {
+        // io-homecontrol Byte 8 is the Command ID
+        runTest("sendWink - Command ID is 0x20", sent[8] == 0x20);
+
+        // Byte 9 & 10 are the Sequence Counter (Big Endian)
+        // It should be 0x00 0x00 for the first transmission
+        runTest("sendWink - Sequence Counter starts at 0", sent[9] == 0x00 && sent[10] == 0x00);
+    }
+}
+
 int main() {
 
     testCaseSecurityTamper();
@@ -562,6 +588,8 @@ int main() {
     runRadioTransmitTests();
 
     runRadioReceiveTests();
+
+    testCaseSendWink();
 
     return 0;
 }
