@@ -42,6 +42,11 @@
 #define IOHOME_FRAME_MAC_LEN                (3)
 #define IOHOME_FRAME_HEADER_LEN             (IOHOME_FRAME_HEADER_CORE_LEN + 2 * IOHOME_FRAME_MAC_LEN) // CTRL0, CTRL1, SRC_MAC (3), DEST_MAC (3) = 8 bytes
 #define IOHOME_COMMAND_ID_LEN               (1)
+// Layer 3 constants
+#define IOHOME_SECURITY_COUNTER_LEN         (2)
+#define IOHOME_SECURITY_MAC_LEN             (6)
+#define IOHOME_SECURITY_FOOTER_LEN          (IOHOME_SECURITY_COUNTER_LEN + IOHOME_SECURITY_MAC_LEN) // 8 bytes
+
 #pragma endregion CONST
 
 /*!
@@ -98,103 +103,63 @@ struct IoHomeFrame_t {
 */
 class IoHomeNode {
   public:
-
-    /*!
-      \brief Default constructor.
-      \param phy Pointer to the PhysicalLayer radio module.
-      \param channel Pointer to the io-homecontrol channel to use.
-    */
     IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel);
 
-    /*!
-      \brief $description
-      \param channel $description
-      \param sourceNodeID $description
-      \param destinationNodeId $description
-      \param stackKey $description
-      \param systemKey $description
-      \returns \ref status_codes
-    */
-    void begin(const IoHomeChannel_t* channel, NodeId source_node_id, NodeId destination_node_id, uint8_t* stack_key, uint8_t* system_key);
+    void begin(const IoHomeChannel_t* channel,
+               NodeId source_node_id,
+               NodeId destination_node_id,
+               uint8_t* stack_key,
+               uint8_t* system_key);
 
-    PhysicalLayer* phyLayer = NULL;
-    const IoHomeChannel_t* channel; // Const member pointer, must be initialized in constructor
-
-    // configure common physical layer properties (preamble, sync word etc.)
     int16_t setPhyProperties();
+    int16_t transmitFrame(const std::vector<uint8_t>& frame);
+    int16_t receiveFrame(IoHomeFrame_t& receivedFrame);
 
-    // crc16-kermit that takes a uint8_t array of even length and calculates the checksum
     static uint16_t crc16(const uint8_t* data, size_t length);
+    static bool validateFrameCrc(const uint8_t* frame, size_t frameLength);
 
-    // network-to-host conversion method - takes data from network packet and converts it to the host endians
+    std::vector<uint8_t> buildFrame(
+      uint8_t ctrlByte0, uint8_t ctrlByte1,
+      NodeId sourceMac, NodeId destMac,
+      uint8_t commandId, const std::vector<uint8_t>& payload
+    );
+
+    static bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
+
+    // Template helpers (Must be in header)
     template<typename T>
     static T ntoh(uint8_t* buff, size_t size = 0) {
       uint8_t* buffPtr = buff;
-      size_t targetSize = sizeof(T);
-      if(size != 0) {targetSize = size;}
+      size_t targetSize = (size == 0) ? sizeof(T) : size;
       T res = 0;
-      for(size_t i = 0; i < targetSize; i++) {res |= (uint32_t)(*(buffPtr++)) << 8*i;}
-      return(res);
+      for(size_t i = 0; i < targetSize; i++) {
+        res |= (static_cast<T>(*(buffPtr++)) << (8 * i));
+      }
+      return res;
     }
 
-    // host-to-network conversion method - takes data from host variable and and converts it to network packet endians
     template<typename T>
     static void hton(uint8_t* buff, T val, size_t size = 0) {
       uint8_t* buffPtr = buff;
-      size_t targetSize = sizeof(T);
-      if(size != 0) {targetSize = size;}
-      for(size_t i = 0; i < targetSize; i++) {*(buffPtr++) = val >> 8*i;}
+      size_t targetSize = (size == 0) ? sizeof(T) : size;
+      for(size_t i = 0; i < targetSize; i++) {
+        *(buffPtr++) = static_cast<uint8_t>((val >> (8 * i)) & 0xFF);
+      }
     }
 
-    /*!
-      \brief Validates the CRC-16 of an io-homecontrol frame.
-      \param frame Pointer to the complete io-homecontrol frame (including CRC).
-      \param frameLength The total length of the frame in bytes.
-      \returns True if the calculated CRC matches the CRC in the frame, false otherwise.
-    */
-    static bool validateFrameCrc(const uint8_t* frame, size_t frameLength);
+  private:
+    // Encapsulated members (The "Guts" of the node)
+    PhysicalLayer* _phyLayer;
+    const IoHomeChannel_t* _channel;
 
-    /*!
-      \brief Builds a complete io-homecontrol frame including CRC-16.
-      \param ctrlByte0 The first control byte. The length field in this byte will be overwritten by the actual message body length.
-      \param ctrlByte1 The second control byte.
-      \param sourceMac The source node ID.
-      \param destMac The destination node ID.
-      \param commandId The command ID.
-      \param payload The message payload.
-      \returns A std::vector<uint8_t> containing the complete frame.
-    */
-    static std::vector<uint8_t> buildFrame(
-      uint8_t ctrlByte0,
-      uint8_t ctrlByte1,
-      NodeId sourceMac,
-      NodeId destMac,
-      uint8_t commandId,
-      const std::vector<uint8_t>& payload
-    );
+    NodeId _source_node_id;
+    NodeId _destination_node_id;
 
-    /*!
-      \brief Parses an io-homecontrol frame and validates its CRC.
-      \param frame Pointer to the raw io-homecontrol frame data.
-      \param frameLength The total length of the raw frame data.
-      \param parsedFrame Reference to an IoHomeFrame_t struct to populate with parsed data.
-      \returns True if the frame was successfully parsed and its CRC is valid, false otherwise.
-    */
-    static bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
+    uint8_t _stack_key[16];
+    uint8_t _system_key[16];
 
-    /*!
-      \brief Transmits a complete io-homecontrol frame over the physical layer.
-      \param frame The complete io-homecontrol frame to transmit.
-      \returns RadioLib status code (0 on success, non-zero on error).
-    */
-    int16_t transmitFrame(const std::vector<uint8_t>& frame);
+    // Counter for the Security Layer (u2 counter in .ksy)
+    uint16_t _sequence_counter = 0;
+}; // <--- This closes the class
 
-    /*!
-      \brief Receives an io-homecontrol frame from the physical layer and parses it.
-      \param receivedFrame Reference to an IoHomeFrame_t struct to populate with received and parsed data.
-      \returns RadioLib status code (0 on success, non-zero on error).
-    */
-    int16_t receiveFrame(IoHomeFrame_t& receivedFrame);
-};
-
-#endif
+#endif // <--- This closes the header guard

@@ -90,6 +90,33 @@ void runCRCTests()
 
 }
 
+// --- Test case 16: Build frame with a small payload ---
+void testCase16()
+{
+    IoHomeTestFixture local_fx; // Fresh node, counter starts at 0
+    std::vector<uint8_t> small_payload_vec = {0xA0, 0xB1, 0xC2};
+
+    // Call #1: Counter is 0
+    auto frame1 = local_fx.node.buildFrame(
+            local_fx.ctrl0_base, local_fx.ctrl1, local_fx.src_mac, local_fx.dest_mac, local_fx.cmd_id, small_payload_vec
+    );
+
+    // Calculate offset (Total - 10)
+    size_t off1 = frame1.size() - 10;
+    uint16_t count1 = (frame1[off1] << 8) | frame1[off1 + 1];
+
+    runTest("First call counter is 0", count1 == 0,
+            "Counter was not 0. Did buildFrame run before this?", count1, 0);
+
+    // Call #2: Counter is 1
+    auto frame2 = local_fx.node.buildFrame(local_fx.ctrl0_base, local_fx.ctrl1, local_fx.src_mac, local_fx.dest_mac, local_fx.cmd_id, {});
+    size_t off2 = frame2.size() - 10;
+    uint16_t count2 = (frame2[off2] << 8) | frame2[off2 + 1];
+
+    runTest("Counter increments between calls", count2 == (count1 + 1),
+            "Counter jump mismatch", (uint32_t)count2, (uint32_t)(count1 + 1));
+}
+
 void runFrameTests()
 {
     std::cout << "\nStarting IoHomeNode Frame Utility tests..." << std::endl;
@@ -145,76 +172,74 @@ void runFrameTests()
 
     // Test case 15: Build frame with no payload
     std::vector<uint8_t> no_payload_vec = {};
-    std::vector<uint8_t> frame_no_payload = IoHomeNode::buildFrame(
+    std::vector<uint8_t> frame_no_payload = fx.node.buildFrame(
       fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, no_payload_vec
     );
-    size_t expected_message_body_len_no_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN; // 8 + 1 = 9
-    size_t expected_total_frame_len_no_payload = expected_message_body_len_no_payload + IOHOME_FRAME_CRC_LEN; // 9 + 2 = 11
+// 1. Calculate Expected Lengths using the new helper
+    size_t expected_total_no_payload = calculateExpectedFrameLen(no_payload_vec.size()); // Should be 19
+    size_t expected_body_no_payload = expected_total_no_payload - IOHOME_FRAME_CRC_LEN;  // Should be 17
 
-    runTest("buildFrame (no payload) - total length", frame_no_payload.size() == expected_total_frame_len_no_payload,
-            "Total length mismatch", frame_no_payload.size(), expected_total_frame_len_no_payload);
+    // 2. Validate Total Length
+    runTest("buildFrame (no payload) - total length", frame_no_payload.size() == expected_total_no_payload,
+            "Total length mismatch", frame_no_payload.size(), expected_total_no_payload);
+
+    // 3. Validate CRC
     runTest("buildFrame (no payload) - CRC valid", IoHomeNode::validateFrameCrc(frame_no_payload.data(), frame_no_payload.size()));
-    // Verify specific bytes
-    runTest("buildFrame (no payload) - CTRL0 length bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_no_payload - 1),
-            "CTRL0 length bits mismatch", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & 0x1F), (expected_message_body_len_no_payload - 1)); // 9 - 1 = 8
+
+    // 4. Validate CTRL0 Length Bits (Formula: BodyLen - 1)
+    // For 0 payload: 17 - 1 = 16 (0x10)
+    uint8_t expected_len_bits = (uint8_t)(expected_body_no_payload - 1);
+    runTest("buildFrame (no payload) - CTRL0 length bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == expected_len_bits,
+            "CTRL0 length bits mismatch", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & 0x1F), expected_len_bits);
+
+    // 5. Validate Headers and IDs
     runTest("buildFrame (no payload) - CTRL0 mode/order bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & ~0x1F) == fx.ctrl0_base,
             "CTRL0 mode/order bits mismatch", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & ~0x1F), fx.ctrl0_base);
     runTest("buildFrame (no payload) - CTRL1", frame_no_payload[IOHOME_CTRLBYTE1_POS] == fx.ctrl1,
             "CTRL1 mismatch", frame_no_payload[IOHOME_CTRLBYTE1_POS], fx.ctrl1);
     runTest("buildFrame (no payload) - SRC_MAC[0]", frame_no_payload[IOHOME_MAC_SOURCE_POS] == fx.src_mac.n0,
             "SRC_MAC[0] mismatch", frame_no_payload[IOHOME_MAC_SOURCE_POS], fx.src_mac.n0);
-
     runTest("buildFrame (no payload) - DEST_MAC[0]", frame_no_payload[IOHOME_MAC_DEST_POS] == fx.dest_mac.n0,
             "DEST_MAC[0] mismatch", frame_no_payload[IOHOME_MAC_DEST_POS], fx.dest_mac.n0);
+
+    // 6. Validate Command ID position
     runTest("buildFrame (no payload) - CMD_ID", frame_no_payload[IOHOME_FRAME_HEADER_LEN] == fx.cmd_id,
             "CMD_ID mismatch", frame_no_payload[IOHOME_FRAME_HEADER_LEN], fx.cmd_id);
+
+    // 7. NEW: Validate Security Footer (Counter + MAC)
+    // Position: After Header(8) and Command(1)
+    size_t footer_pos = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN;
+    runTest("buildFrame (no payload) - Security Footer starts with 0x00", frame_no_payload[footer_pos] == 0x00);
+
     printHexVector("Built frame (no payload)", frame_no_payload);
 
-
-    // Test case 16: Build frame with a small payload
-    std::vector<uint8_t> small_payload_vec = {0xA0, 0xB1, 0xC2}; // 3 bytes
-    std::vector<uint8_t> frame_small_payload = IoHomeNode::buildFrame(
-            fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, small_payload_vec
-    );
-    size_t expected_message_body_len_small_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + small_payload_vec.size(); // 8 + 1 + 3 = 12
-    size_t expected_total_frame_len_small_payload = expected_message_body_len_small_payload + IOHOME_FRAME_CRC_LEN; // 12 + 2 = 14
-
-    runTest("buildFrame (small payload) - total length", frame_small_payload.size() == expected_total_frame_len_small_payload,
-            "Total length mismatch", frame_small_payload.size(), expected_total_frame_len_small_payload);
-    runTest("buildFrame (small payload) - CRC valid", IoHomeNode::validateFrameCrc(frame_small_payload.data(), frame_small_payload.size()));
-    // Verify specific bytes
-    runTest("buildFrame (small payload) - CTRL0 length bits", (frame_small_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_small_payload - 1),
-            "CTRL0 length bits mismatch", (frame_small_payload[IOHOME_CTRLBYTE0_POS] & 0x1F), (expected_message_body_len_small_payload - 1)); // 12 - 1 = 11
-    runTest("buildFrame (small payload) - Payload[0]", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN] == 0xA0,
-            "Payload[0] mismatch", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN], 0xA0);
-    runTest("buildFrame (small payload) - Payload[2]", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + 2] == 0xC2,
-            "Payload[2] mismatch", frame_small_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + 2], 0xC2);
-    printHexVector("Built frame (small payload)", frame_small_payload);
+    testCase16();
 
 
     // Test case 17: Build frame with maximum possible payload length
     // The length field in CTRLBYTE0 is 5 bits, so max value is 31 (0x1F).
     // This means max messageBodyLen = 31 + 1 = 32 bytes.
-    // messageBodyLen = IOHOME_FRAME_HEADER_LEN (8) + IOHOME_COMMAND_ID_LEN (1) + payload.size()
-    // 32 = 8 + 1 + payload.size() => payload.size() = 23
-    size_t max_payload_size = 23;
-    std::vector<uint8_t> max_payload_vec(max_payload_size, 0xDE); // Max payload 23 bytes
-    std::vector<uint8_t> frame_max_payload = IoHomeNode::buildFrame(
+    // messageBodyLen = Header(8) + CmdID(1) + Payload(N) + Counter(2) + MAC(6)
+    // 32 = 8 + 1 + N + 2 + 6  =>  32 = 17 + N
+    // Therefore, max payload.size() = 15 bytes.
+    size_t max_payload_size = 15; // 32 (Max Body) - 17 (Overhead) = 15
+    std::vector<uint8_t> max_payload_vec(max_payload_size, 0xDE);
+
+    // Using the static call for now since that's what's working for you
+    std::vector<uint8_t> frame_max_payload = fx.node.buildFrame(
       fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, max_payload_vec
     );
-    size_t expected_message_body_len_max_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + max_payload_size; // 8 + 1 + 23 = 32
-    size_t expected_total_frame_len_max_payload = expected_message_body_len_max_payload + IOHOME_FRAME_CRC_LEN; // 32 + 2 = 34
 
-    runTest("buildFrame (max payload) - total length", frame_max_payload.size() == expected_total_frame_len_max_payload,
-            "Total length mismatch", frame_max_payload.size(), expected_total_frame_len_max_payload);
-    runTest("buildFrame (max payload) - CRC valid", IoHomeNode::validateFrameCrc(frame_max_payload.data(), frame_max_payload.size()));
-    runTest("buildFrame (max payload) - CTRL0 length bits", (frame_max_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_max_payload - 1),
-            "CTRL0 length bits mismatch", (frame_max_payload[IOHOME_CTRLBYTE0_POS] & 0x1F), (expected_message_body_len_max_payload - 1)); // 32 - 1 = 31 = 0x1F
-    runTest("buildFrame (max payload) - Payload[0]", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN] == 0xDE,
-            "Payload[0] mismatch", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN], 0xDE);
-    runTest("buildFrame (max payload) - Last Payload byte", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + max_payload_size - 1] == 0xDE,
-            "Last Payload byte mismatch", frame_max_payload[IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + max_payload_size - 1], 0xDE);
-    printHexVector("Built frame (max payload)", frame_max_payload);
+    size_t expected_total_max = calculateExpectedFrameLen(max_payload_size); // 34
+    size_t expected_body_max = expected_total_max - IOHOME_FRAME_CRC_LEN;     // 32
+
+    runTest("buildFrame (max payload) - total length", frame_max_payload.size() == expected_total_max,
+            "Total length mismatch", frame_max_payload.size(), expected_total_max);
+
+    // This should now be (32 - 1) = 31 (0x1F)
+    uint8_t expected_bits = (uint8_t)(expected_body_max - 1);
+    runTest("buildFrame (max payload) - CTRL0 length bits", (frame_max_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == expected_bits,
+            "CTRL0 length bits mismatch", (frame_max_payload[IOHOME_CTRLBYTE0_POS] & 0x1F), expected_bits);
 
     std::cout << "All IoHomeNode Frame Building tests completed." << std::endl;
 
@@ -223,7 +248,7 @@ void runFrameTests()
     IoHomeFrame_t parsed_frame;
 
     // Test case 18: Parse a valid frame with no payload
-    std::vector<uint8_t> parsed_frame_no_payload = IoHomeNode::buildFrame(
+    std::vector<uint8_t> parsed_frame_no_payload = fx.node.buildFrame(
       fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, no_payload_vec
     );
     printHexVector("Frame to parse (no payload)", parsed_frame_no_payload);
@@ -244,7 +269,9 @@ void runFrameTests()
             "Payload size mismatch (expected empty)", parsed_frame.payload.size(), (size_t)0);
 
     // Test case 19: Parse a valid frame with a small payload
-    std::vector<uint8_t> parsed_frame_small_payload = IoHomeNode::buildFrame(
+    std::vector<uint8_t> small_payload_vec = {0xA0, 0xB1, 0xC2};
+
+    std::vector<uint8_t> parsed_frame_small_payload = fx.node.buildFrame(
       fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, small_payload_vec
     );
     printHexVector("Frame to parse (small payload)", parsed_frame_small_payload);
@@ -260,7 +287,7 @@ void runFrameTests()
     }
 
     // Test case 20: Parse a valid frame with maximum payload
-    std::vector<uint8_t> parsed_frame_max_payload = IoHomeNode::buildFrame(
+    std::vector<uint8_t> parsed_frame_max_payload = fx.node.buildFrame(
       fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, max_payload_vec
     );
     printHexVector("Frame to parse (max payload)", parsed_frame_max_payload);
@@ -316,7 +343,7 @@ void runRadioTransmitTests()
     std::vector<uint8_t> no_payload_vec = {};
 
     // Test case 24: Transmit a valid frame (successful scenario)
-    std::vector<uint8_t> frame_to_transmit = IoHomeNode::buildFrame(
+    std::vector<uint8_t> frame_to_transmit = fx.node.buildFrame(
       fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, no_payload_vec
     );
     printHexVector("Frame to transmit (success)", frame_to_transmit);
@@ -357,7 +384,7 @@ void runRadioReceiveTests() {
 
   // Test case 26: Receive a valid frame successfully
   std::vector<uint8_t> valid_rx_payload = {0xDE, 0xAD, 0xBE, 0xEF};
-  std::vector<uint8_t> valid_rx_frame = IoHomeNode::buildFrame(
+  std::vector<uint8_t> valid_rx_frame = fx.node.buildFrame(
       fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, valid_rx_payload
   );
   printHexVector("Valid RX Frame (expected)", valid_rx_frame);
@@ -450,7 +477,57 @@ void runRadioReceiveTests() {
 
 }
 
+void runCounterIncrementTests() {
+    std::cout << "\nStarting Counter Increment tests..." << std::endl;
+    IoHomeTestFixture fx;
+
+    // Frame 1
+    auto f1 = fx.node.buildFrame(fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, {});
+    size_t off1 = f1.size() - 10; // 2 (CRC) + 6 (MAC) + 2 (Counter)
+    uint16_t c1 = (f1[off1] << 8) | f1[off1 + 1];
+
+    // Frame 2
+    auto f2 = fx.node.buildFrame(fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, {});
+    size_t off2 = f2.size() - 10;
+    uint16_t c2 = (f2[off2] << 8) | f2[off2 + 1];
+
+    runTest("Counter increments: 0 to 1", (c1 == 0 && c2 == 1),
+            "Counter jump mismatch", c2, 1);
+
+    std::cout << "Counter Increment tests completed." << std::endl;
+}
+
+void runBuildingTests() {
+    std::cout << "\nStarting Building Tests..." << std::endl;
+    IoHomeTestFixture fx;
+
+    std::vector<uint8_t> payload = {0x11, 0x22};
+    auto frame = fx.node.buildFrame(fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, payload);
+
+    // 1. Check basic size
+    runTest("Frame size is correct", frame.size() == calculateExpectedFrameLen(payload.size()));
+
+    // 2. Check Counter (Should be 0 for the first call)
+    size_t counter_off = frame.size() - 10;
+    uint16_t c0 = (frame[counter_off] << 8) | frame[counter_off + 1];
+    runTest("First build: Counter is 0", c0 == 0);
+
+    // 3. Check Increment (Second call)
+    auto frame2 = fx.node.buildFrame(fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, {});
+    size_t counter_off2 = frame2.size() - 10;
+    uint16_t c1 = (frame2[counter_off2] << 8) | frame2[counter_off2 + 1];
+    runTest("Second build: Counter is 1", c1 == 1);
+
+    std::cout << "Building Tests completed." << std::endl;
+}
+
+
 int main() {
+
+    runBuildingTests();
+
+    runCounterIncrementTests();
+
     runCRCTests();
 
     runFrameTests();

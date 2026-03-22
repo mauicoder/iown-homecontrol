@@ -21,6 +21,14 @@ LORA32_RADIO radio = new Module(LORA32_SPI_CS, LORA32_RADIO_IO0, LORA32_RADIO_RS
 // RadioLib: Get common layer pointer "phy"
 PhysicalLayer* phy = (PhysicalLayer*)&radio;
 
+// --- MANDATORY LINKER FIXES FOR MAC/X86_64 ---
+// These satisfy the PhysicalLayer base class requirements
+int16_t PhysicalLayer::transmit(const uint8_t* data, size_t len, uint8_t addr) { return 0; }
+int16_t PhysicalLayer::setSyncWord(uint8_t* sync, size_t len) { return 0; }
+// Ensure the destructor is defined
+PhysicalLayer::~PhysicalLayer() {}
+// ---------------------------------------------
+
 // function declarations
 // ...
 void dummyISR() {} // TODO configure interrupt actions

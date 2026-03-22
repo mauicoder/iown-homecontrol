@@ -15,6 +15,7 @@
 // --- Mock PhysicalLayer for transmit/receive tests ---
 class MockPhysicalLayer : public PhysicalLayer {
   using PhysicalLayer::setSyncWord; // Pull base class versions into scope
+  using PhysicalLayer::startReceive; // Add this line to stop the "hiding" warning
 public:
     // Mock specific variables to control behavior and capture values
     int16_t startTransmitResult = RADIOLIB_ERR_NONE;
