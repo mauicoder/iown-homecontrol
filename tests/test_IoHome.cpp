@@ -1,3 +1,12 @@
+// Define missing RadioLib constants for testing environment if not pulled in
+#ifndef RADIOLIB_IRQ_ALL
+#define RADIOLIB_IRQ_ALL 0xFFFFFFFFU // A common full mask
+#endif
+
+
+
+//tests for IoHomeNode CRC16 calculation and frame building/parsing
+
 #include <iostream>
 #include <vector>
 #include <cassert>
@@ -7,75 +16,19 @@
 // Include the header for the function we want to test
 #include "IoHome.h"
 #include <RadioLib.h> // Explicitly include for RadioLib error codes
+#include "RadioMock.h"
+#include "Common.h"
+#include "test_IoHome.h"
+#include "TestHelpers.h"
 
-// Provide a definition for the PhysicalLayer base class constructor for the test environment.
-// This is required since MockPhysicalLayer explicitly calls it.
-PhysicalLayer::PhysicalLayer() : freqStep(0.0), maxPacketLength(0) {}
-
-// Define missing RadioLib constants for testing environment if not pulled in
-#ifndef RADIOLIB_NO_IRQ
-#define RADIOLIB_NO_IRQ 0U
-#endif
-#ifndef RADIOLIB_IRQ_ALL
-#define RADIOLIB_IRQ_ALL 0xFFFFFFFFU // A common full mask
-#endif
-
-// Helper function to print test results with optional debug info
-template<typename T_Actual, typename T_Expected>
-void runTest(const std::string& testName, bool condition, const std::string& debugMsg = "", T_Actual actualVal = T_Actual(), T_Expected expectedVal = T_Expected()) {
-    std::cout << "Running test: " << testName << " - ";
-    if (condition) {
-        std::cout << "PASSED" << std::endl;
-    } else {
-        std::cout << "FAILED" << std::endl;
-        if (!debugMsg.empty()) {
-            std::cout << "    DEBUG: " << debugMsg << std::endl;
-        }
-        // Generic debug output for different types
-        if constexpr (std::is_integral_v<T_Actual> && std::is_integral_v<T_Expected>) {
-            std::cout << "    Expected: 0x" << std::hex << std::setw(sizeof(T_Expected)*2) << std::setfill('0') << (long long)expectedVal
-                      << ", Actual: 0x" << std::hex << std::setw(sizeof(T_Actual)*2) << std::setfill('0') << (long long)actualVal << std::endl;
-            std::cout << std::dec; // Reset to decimal
-        } else if constexpr (std::is_floating_point_v<T_Actual> && std::is_floating_point_v<T_Expected>) {
-            std::cout << "    Expected: " << std::fixed << std::setprecision(5) << expectedVal
-                      << ", Actual: " << std::fixed << std::setprecision(5) << actualVal << std::endl;
-        }
-        // Specific output for vectors, if needed. This is more complex to generalize nicely.
-        // For now, rely on specific debug blocks.
-    }
-    assert(condition); // Will terminate if condition is false
-}
-
-// Overload for tests without specific values to compare, just a boolean condition
-void runTest(const std::string& testName, bool condition) {
-    std::cout << "Running test: " << testName << " - ";
-    if (condition) {
-        std::cout << "PASSED" << std::endl;
-    } else {
-        std::cout << "FAILED" << std::endl;
-    }
-    assert(condition); // Will terminate if condition is false
-}
-
-
-// Helper to print a vector of bytes in hex
-void printHexVector(const std::string& label, const std::vector<uint8_t>& vec) {
-    std::cout << "    " << label << " (len " << vec.size() << "): ";
-    for (uint8_t byte : vec) {
-        std::cout << std::hex << std::setw(2) << std::setfill('0') << (int)byte << " ";
-    }
-    std::cout << std::dec << std::endl;
-}
-
-int main() {
-    std::cout << "Starting IoHomeNode CRC16 tests..." << std::endl;
-
+void runCRCTests()
+{
     // Test case 1: Empty data
     std::vector<uint8_t> data1 = {};
     uint16_t expected_crc1 = 0x0000;
     uint16_t actual_crc1 = IoHomeNode::crc16(data1.data(), data1.size());
     runTest("Empty data", actual_crc1 == expected_crc1, "", actual_crc1, expected_crc1);
-    
+
     // Test case 2: Single byte 0x00
     std::vector<uint8_t> data2 = {0x00};
     uint16_t expected_crc2 = 0x0000;
@@ -130,15 +83,18 @@ int main() {
     uint16_t expected_crc10 = 0x07FC; // Corrected expected value for CRC-16/KERMIT
     uint16_t actual_crc10 = IoHomeNode::crc16(data10.data(), data10.size());
     runTest("Longer string 'The quick brown fox...'", actual_crc10 == expected_crc10, "", actual_crc10, expected_crc10);
+}
 
-    std::cout << "\nStarting IoHomeNode Frame Utility tests..." << std::endl;
+void runFrameTests()
+{
+    IoHomeTestFixture fx; // All values initialized once here
 
     // --- Test IOHOME_MSG_LEN macro ---
     // A message with length 0x05 (0b00101) in CTRLBYTE0 would mean 5 + 1 = 6 bytes message length
     // Frame: [CTRLBYTE0 (0x05), CTRLBYTE1, MAC_SRC, MAC_DEST, COMMAND, PARAMETER]
     std::vector<uint8_t> dummy_frame_len_5 = {0x05, 0x00, 0x00, 0x00, 0x00, 0x00};
     size_t expected_msg_len_5 = (0x05 & 0x1F) + 1; // Expected: 6
-    runTest("IOHOME_MSG_LEN (length 5)", IOHOME_MSG_LEN(dummy_frame_len_5.data()) == expected_msg_len_5, 
+    runTest("IOHOME_MSG_LEN (length 5)", IOHOME_MSG_LEN(dummy_frame_len_5.data()) == expected_msg_len_5,
             "Macro length mismatch", IOHOME_MSG_LEN(dummy_frame_len_5.data()), expected_msg_len_5);
 
     // A message with length 0x1F (0b11111) in CTRLBYTE0 would mean 31 + 1 = 32 bytes message length
@@ -178,22 +134,12 @@ int main() {
     std::vector<uint8_t> short_frame = {0x01}; // Length 1, CRC is 2 bytes
     runTest("validateFrameCrc (frame too short)", !IoHomeNode::validateFrameCrc(short_frame.data(), short_frame.size()));
 
-
-    std::cout << "All IoHomeNode CRC16 tests completed." << std::endl;
-
     std::cout << "\nStarting IoHomeNode Frame Building tests..." << std::endl;
-
-    // Common test data for buildFrame tests
-    uint8_t test_ctrl0_base = IOHOME_CTRLBYTE0_MODE_TWOWAY | IOHOME_CTRLBYTE0_ORDER_0; // Length bits will be set by buildFrame
-    uint8_t test_ctrl1 = 0xAA;
-    NodeId test_src_mac = {0x11, 0x22, 0x33};
-    NodeId test_dest_mac = {0x44, 0x55, 0x66};
-    uint8_t test_cmd_id = 0x01;
 
     // Test case 15: Build frame with no payload
     std::vector<uint8_t> no_payload_vec = {};
     std::vector<uint8_t> frame_no_payload = IoHomeNode::buildFrame(
-      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, no_payload_vec
+      fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, no_payload_vec
     );
     size_t expected_message_body_len_no_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN; // 8 + 1 = 9
     size_t expected_total_frame_len_no_payload = expected_message_body_len_no_payload + IOHOME_FRAME_CRC_LEN; // 9 + 2 = 11
@@ -204,24 +150,24 @@ int main() {
     // Verify specific bytes
     runTest("buildFrame (no payload) - CTRL0 length bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & 0x1F) == (expected_message_body_len_no_payload - 1),
             "CTRL0 length bits mismatch", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & 0x1F), (expected_message_body_len_no_payload - 1)); // 9 - 1 = 8
-    runTest("buildFrame (no payload) - CTRL0 mode/order bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & ~0x1F) == test_ctrl0_base,
-            "CTRL0 mode/order bits mismatch", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & ~0x1F), test_ctrl0_base);
-    runTest("buildFrame (no payload) - CTRL1", frame_no_payload[IOHOME_CTRLBYTE1_POS] == test_ctrl1,
-            "CTRL1 mismatch", frame_no_payload[IOHOME_CTRLBYTE1_POS], test_ctrl1);
-    runTest("buildFrame (no payload) - SRC_MAC[0]", frame_no_payload[IOHOME_MAC_SOURCE_POS] == test_src_mac.n0,
-            "SRC_MAC[0] mismatch", frame_no_payload[IOHOME_MAC_SOURCE_POS], test_src_mac.n0);
-    
-    runTest("buildFrame (no payload) - DEST_MAC[0]", frame_no_payload[IOHOME_MAC_DEST_POS] == test_dest_mac.n0,
-            "DEST_MAC[0] mismatch", frame_no_payload[IOHOME_MAC_DEST_POS], test_dest_mac.n0);
-    runTest("buildFrame (no payload) - CMD_ID", frame_no_payload[IOHOME_FRAME_HEADER_LEN] == test_cmd_id,
-            "CMD_ID mismatch", frame_no_payload[IOHOME_FRAME_HEADER_LEN], test_cmd_id);
+    runTest("buildFrame (no payload) - CTRL0 mode/order bits", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & ~0x1F) == fx.ctrl0_base,
+            "CTRL0 mode/order bits mismatch", (frame_no_payload[IOHOME_CTRLBYTE0_POS] & ~0x1F), fx.ctrl0_base);
+    runTest("buildFrame (no payload) - CTRL1", frame_no_payload[IOHOME_CTRLBYTE1_POS] == fx.ctrl1,
+            "CTRL1 mismatch", frame_no_payload[IOHOME_CTRLBYTE1_POS], fx.ctrl1);
+    runTest("buildFrame (no payload) - SRC_MAC[0]", frame_no_payload[IOHOME_MAC_SOURCE_POS] == fx.src_mac.n0,
+            "SRC_MAC[0] mismatch", frame_no_payload[IOHOME_MAC_SOURCE_POS], fx.src_mac.n0);
+
+    runTest("buildFrame (no payload) - DEST_MAC[0]", frame_no_payload[IOHOME_MAC_DEST_POS] == fx.dest_mac.n0,
+            "DEST_MAC[0] mismatch", frame_no_payload[IOHOME_MAC_DEST_POS], fx.dest_mac.n0);
+    runTest("buildFrame (no payload) - CMD_ID", frame_no_payload[IOHOME_FRAME_HEADER_LEN] == fx.cmd_id,
+            "CMD_ID mismatch", frame_no_payload[IOHOME_FRAME_HEADER_LEN], fx.cmd_id);
     printHexVector("Built frame (no payload)", frame_no_payload);
 
 
     // Test case 16: Build frame with a small payload
     std::vector<uint8_t> small_payload_vec = {0xA0, 0xB1, 0xC2}; // 3 bytes
     std::vector<uint8_t> frame_small_payload = IoHomeNode::buildFrame(
-      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, small_payload_vec
+            fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, small_payload_vec
     );
     size_t expected_message_body_len_small_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + small_payload_vec.size(); // 8 + 1 + 3 = 12
     size_t expected_total_frame_len_small_payload = expected_message_body_len_small_payload + IOHOME_FRAME_CRC_LEN; // 12 + 2 = 14
@@ -247,7 +193,7 @@ int main() {
     size_t max_payload_size = 23;
     std::vector<uint8_t> max_payload_vec(max_payload_size, 0xDE); // Max payload 23 bytes
     std::vector<uint8_t> frame_max_payload = IoHomeNode::buildFrame(
-      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, max_payload_vec
+      fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, max_payload_vec
     );
     size_t expected_message_body_len_max_payload = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + max_payload_size; // 8 + 1 + 23 = 32
     size_t expected_total_frame_len_max_payload = expected_message_body_len_max_payload + IOHOME_FRAME_CRC_LEN; // 32 + 2 = 34
@@ -271,7 +217,7 @@ int main() {
 
     // Test case 18: Parse a valid frame with no payload
     std::vector<uint8_t> parsed_frame_no_payload = IoHomeNode::buildFrame(
-      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, no_payload_vec
+      fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, no_payload_vec
     );
     printHexVector("Frame to parse (no payload)", parsed_frame_no_payload);
     bool parse_result_no_payload = IoHomeNode::parseFrame(parsed_frame_no_payload.data(), parsed_frame_no_payload.size(), parsed_frame);
@@ -279,20 +225,20 @@ int main() {
     runTest("parseFrame (no payload) - isValid flag", parsed_frame.isValid);
     runTest("parseFrame (no payload) - CTRL0", parsed_frame.ctrlByte0 == parsed_frame_no_payload[IOHOME_CTRLBYTE0_POS],
             "CTRL0 mismatch", parsed_frame.ctrlByte0, parsed_frame_no_payload[IOHOME_CTRLBYTE0_POS]);
-    runTest("parseFrame (no payload) - CTRL1", parsed_frame.ctrlByte1 == test_ctrl1,
-            "CTRL1 mismatch", parsed_frame.ctrlByte1, test_ctrl1);
-    runTest("parseFrame (no payload) - SRC_MAC[0]", parsed_frame.sourceMac.n0 == test_src_mac.n0,
-            "SRC_MAC[0] mismatch", parsed_frame.sourceMac.n0, test_src_mac.n0);
-    runTest("parseFrame (no payload) - DEST_MAC[0]", parsed_frame.destMac.n0 == test_dest_mac.n0,
-            "DEST_MAC[0] mismatch", parsed_frame.destMac.n0, test_dest_mac.n0);
-    runTest("parseFrame (no payload) - CMD_ID", parsed_frame.commandId == test_cmd_id,
-            "CMD_ID mismatch", parsed_frame.commandId, test_cmd_id);
+    runTest("parseFrame (no payload) - CTRL1", parsed_frame.ctrlByte1 == fx.ctrl1,
+            "CTRL1 mismatch", parsed_frame.ctrlByte1, fx.ctrl1);
+    runTest("parseFrame (no payload) - SRC_MAC[0]", parsed_frame.sourceMac.n0 == fx.src_mac.n0,
+            "SRC_MAC[0] mismatch", parsed_frame.sourceMac.n0, fx.src_mac.n0);
+    runTest("parseFrame (no payload) - DEST_MAC[0]", parsed_frame.destMac.n0 == fx.dest_mac.n0,
+            "DEST_MAC[0] mismatch", parsed_frame.destMac.n0, fx.dest_mac.n0);
+    runTest("parseFrame (no payload) - CMD_ID", parsed_frame.commandId == fx.cmd_id,
+            "CMD_ID mismatch", parsed_frame.commandId, fx.cmd_id);
     runTest("parseFrame (no payload) - Payload size", parsed_frame.payload.empty(),
             "Payload size mismatch (expected empty)", parsed_frame.payload.size(), (size_t)0);
 
     // Test case 19: Parse a valid frame with a small payload
     std::vector<uint8_t> parsed_frame_small_payload = IoHomeNode::buildFrame(
-      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, small_payload_vec
+      fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, small_payload_vec
     );
     printHexVector("Frame to parse (small payload)", parsed_frame_small_payload);
     bool parse_result_small_payload = IoHomeNode::parseFrame(parsed_frame_small_payload.data(), parsed_frame_small_payload.size(), parsed_frame);
@@ -308,7 +254,7 @@ int main() {
 
     // Test case 20: Parse a valid frame with maximum payload
     std::vector<uint8_t> parsed_frame_max_payload = IoHomeNode::buildFrame(
-      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, max_payload_vec
+      fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, max_payload_vec
     );
     printHexVector("Frame to parse (max payload)", parsed_frame_max_payload);
     bool parse_result_max_payload = IoHomeNode::parseFrame(parsed_frame_max_payload.data(), parsed_frame_max_payload.size(), parsed_frame);
@@ -336,7 +282,7 @@ int main() {
     bool parse_result_too_short = IoHomeNode::parseFrame(too_short_frame.data(), too_short_frame.size(), parsed_frame);
     runTest("parseFrame (too short) - overall result", !parse_result_too_short);
     runTest("parseFrame (too short) - isValid flag", !parsed_frame.isValid);
-    
+
     // Test case 23: Parse a frame where declared length doesn't match actual data length (after CRC check)
     // This creates a valid CRC but internal length is inconsistent.
     std::vector<uint8_t> inconsistent_len_frame = parsed_frame_small_payload;
@@ -345,155 +291,21 @@ int main() {
     bool parse_result_inconsistent_len = IoHomeNode::parseFrame(inconsistent_len_frame.data(), inconsistent_len_frame.size(), parsed_frame);
     runTest("parseFrame (inconsistent declared length) - overall result", !parse_result_inconsistent_len);
     runTest("parseFrame (inconsistent declared length) - isValid flag", !parsed_frame.isValid);
+}
 
-
-    std::cout << "All IoHomeNode Frame Parsing tests completed." << std::endl;
-
-    // --- Mock PhysicalLayer for transmit/receive tests ---
-    class MockPhysicalLayer : public PhysicalLayer {
-    public:
-        // Mock specific variables to control behavior and capture values
-        int16_t startTransmitResult = RADIOLIB_ERR_NONE;
-        int16_t startReceiveResult = RADIOLIB_ERR_NONE;
-        int16_t readDataResult = RADIOLIB_ERR_NONE;
-        float actualFrequencySet = 0.0;
-        std::vector<uint8_t> rxBufferInternal;
-        size_t mockPacketLength = 0; // Length reported by getPacketLength
-
-        // Constructor
-        MockPhysicalLayer() : PhysicalLayer() {}
-
-        // Override virtual functions from PhysicalLayer with mock implementations
-
-        // Core operation mocks
-        int16_t setFrequency(float freq) override {
-            actualFrequencySet = freq;
-            return RADIOLIB_ERR_NONE;
-        }
-
-        // Override PhysicalLayer::transmit (missing in previous mock)
-        int16_t transmit(const uint8_t* data, size_t len, uint8_t addr = 0) override {
-            (void)data; (void)len; (void)addr; // Suppress unused parameter warnings
-            // This mock method can be expanded if test cases require specific behavior
-            // from the base `transmit` function (which `IoHomeNode` does not currently call directly).
-            return RADIOLIB_ERR_NONE;
-        }
-
-        int16_t startTransmit(const uint8_t* data, size_t len, uint8_t addr = 0) override {
-            (void)data; (void)len; (void)addr; // Suppress unused parameter warnings
-            return startTransmitResult;
-        }
-
-        int16_t startReceive() override {
-            return startReceiveResult;
-        }
-
-        int16_t startReceive(uint32_t timeout, RadioLibIrqFlags_t irqFlags = RADIOLIB_IRQ_RX_DEFAULT_FLAGS, RadioLibIrqFlags_t irqMask = RADIOLIB_IRQ_RX_DEFAULT_MASK, size_t len = 0) override {
-            (void)timeout; (void)irqFlags; (void)irqMask; (void)len; // Suppress unused parameter warnings
-            return startReceiveResult;
-        }
-
-        size_t getPacketLength(bool update = true) override {
-            (void)update; // Suppress unused parameter warning
-            return mockPacketLength;
-        }
-
-        int16_t readData(uint8_t* data, size_t len) override {
-            if (readDataResult != RADIOLIB_ERR_NONE) {
-                return readDataResult;
-            }
-            if (len > rxBufferInternal.size()) {
-                // Return an error if trying to read more than available in mock buffer
-                return RADIOLIB_ERR_RX_TIMEOUT;
-            }
-            std::copy(rxBufferInternal.begin(), rxBufferInternal.begin() + len, data);
-            return RADIOLIB_ERR_NONE;
-        }
-
-        // --- Pure Virtual Functions from PhysicalLayer.h ---
-        Module* getMod() override { return nullptr; } // Must be implemented
-
-        // --- Other Virtual Functions from PhysicalLayer.h ---
-
-        int16_t sleep() override { return RADIOLIB_ERR_NONE; }
-        int16_t standby() override { return RADIOLIB_ERR_NONE; } // Standby with no arguments
-        int16_t standby(uint8_t mode) override {
-            (void)mode; // Suppress unused parameter warning
-            return RADIOLIB_ERR_NONE;
-        }
-        int16_t receive(uint8_t* data, size_t len, RadioLibTime_t timeout = 0) override { (void)data; (void)len; (void)timeout; return RADIOLIB_ERR_NONE; }
-        int16_t finishTransmit() override { return RADIOLIB_ERR_NONE; }
-        int16_t finishReceive() override { return RADIOLIB_ERR_NONE; }
-        int16_t transmitDirect(uint32_t frf = 0) override { (void)frf; return RADIOLIB_ERR_NONE; }
-        int16_t receiveDirect() override { return RADIOLIB_ERR_NONE; }
-        int16_t setBitRate(float br) override { (void)br; return RADIOLIB_ERR_NONE; }
-        int16_t setFrequencyDeviation(float freqDev) override { (void)freqDev; return RADIOLIB_ERR_NONE; }
-        int16_t setDataShaping(uint8_t sh) override { (void)sh; return RADIOLIB_ERR_NONE; }
-        int16_t setEncoding(uint8_t encoding) override { (void)encoding; return RADIOLIB_ERR_NONE; }
-        int16_t invertIQ(bool enable) override { (void)enable; return RADIOLIB_ERR_NONE; }
-        int16_t setOutputPower(int8_t power) override { (void)power; return RADIOLIB_ERR_NONE; }
-        int16_t checkOutputPower(int8_t power, int8_t* clipped) override { (void)power; (void)clipped; return RADIOLIB_ERR_NONE; }
-        int16_t setSyncWord(uint8_t* sync, size_t len) override { (void)sync; (void)len; return RADIOLIB_ERR_NONE; }
-        int16_t setPreambleLength(size_t len) override { (void)len; return RADIOLIB_ERR_NONE; }
-        int16_t setDataRate(DataRate_t dr, ModemType_t modem = RADIOLIB_MODEM_NONE) override { (void)dr; (void)modem; return RADIOLIB_ERR_NONE; }
-        int16_t checkDataRate(DataRate_t dr, ModemType_t modem = RADIOLIB_MODEM_NONE) override { (void)dr; (void)modem; return RADIOLIB_ERR_NONE; }
-        float getRSSI() override { return 0.0; } // getRSSI without arguments
-        float getSNR() override { return 0.0; }
-        RadioLibTime_t calculateTimeOnAir(ModemType_t modem, DataRate_t dr, PacketConfig_t pc, size_t len) override { (void)modem; (void)dr; (void)pc; (void)len; return 0; }
-        RadioLibTime_t getTimeOnAir(size_t len) override { (void)len; return 0; }
-        RadioLibTime_t calculateRxTimeout(RadioLibTime_t timeoutUs) override { (void)timeoutUs; return 0; }
-        uint32_t getIrqFlags() override { return RADIOLIB_NO_IRQ; }
-        int16_t setIrqFlags(uint32_t irq) override { (void)irq; return RADIOLIB_ERR_NONE; }
-        int16_t clearIrqFlags(uint32_t irq) override { (void)irq; return RADIOLIB_ERR_NONE; }
-        int16_t startChannelScan() override { return RADIOLIB_ERR_NONE; }
-        int16_t startChannelScan(const ChannelScanConfig_t &config) override { (void)config; return RADIOLIB_ERR_NONE; }
-        int16_t getChannelScanResult() override { return RADIOLIB_ERR_NONE; }
-        int16_t scanChannel() override { return RADIOLIB_ERR_NONE; }
-        int16_t scanChannel(const ChannelScanConfig_t &config) override { (void)config; return RADIOLIB_ERR_NONE; }
-        uint8_t randomByte() override { return 0; }
-        int16_t setDIOMapping(uint32_t pin, uint32_t value) override { (void)pin; (void)value; return RADIOLIB_ERR_NONE; }
-        void setPacketReceivedAction(void (*func)(void)) override { (void)func; }
-        void clearPacketReceivedAction() override {}
-        void setPacketSentAction(void (*func)(void)) override { (void)func; }
-        void clearPacketSentAction() override {}
-        void setChannelScanAction(void (*func)(void)) override { (void)func; }
-        void clearChannelScanAction() override {}
-        int16_t setModem(ModemType_t modem) override { (void)modem; return RADIOLIB_ERR_NONE; }
-        int16_t getModem(ModemType_t* modem) override { (void)modem; return RADIOLIB_ERR_NONE; }
-        int16_t stageMode(RadioModeType_t mode, RadioModeConfig_t* cfg) override { (void)mode; (void)cfg; return RADIOLIB_ERR_NONE; }
-        int16_t launchMode() override { return RADIOLIB_ERR_NONE; }
-        void setDirectAction(void (*func)(void)) override { (void)func; }
-        void readBit(uint32_t pin) override { (void)pin; }
-
-        // The following methods were identified as non-virtual in PhysicalLayer.h
-        // but were present in the mock. They should not be marked 'override' and
-        // are typically not part of the common PhysicalLayer interface.
-        // I've removed the 'override' keyword and kept them as member functions if they serve
-        // a specific testing purpose within the mock, otherwise they could be removed entirely.
-        int16_t startReceive(uint32_t timeout, uint32_t channel) {
-            (void)timeout; (void)channel;
-            return RADIOLIB_ERR_NONE;
-        }
-        int16_t startTransmit(const std::string& str, uint32_t timeout, uint32_t channel) {
-            (void)str; (void)timeout; (void)channel;
-            return RADIOLIB_ERR_NONE;
-        }
-        float getRSSI(bool actual = false) { // This overloads the virtual getRSSI() with a different signature
-            (void)actual;
-            return 0.0;
-        }
-
-    };
-
-    std::cout << "\nStarting IoHomeNode Transmit tests..." << std::endl;
+void runRadioTransmitTests()
+{
+    IoHomeTestFixture fx; // All values initialized once here
 
     MockPhysicalLayer mockPhy;
     IoHomeChannel_t test_channel = {868, 95}; // e.g., 868.95 MHz
     IoHomeNode ioHomeNode_tx_test(&mockPhy, &test_channel);
 
+    std::vector<uint8_t> no_payload_vec = {};
+
     // Test case 24: Transmit a valid frame (successful scenario)
     std::vector<uint8_t> frame_to_transmit = IoHomeNode::buildFrame(
-      test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, no_payload_vec
+      fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, no_payload_vec
     );
     printHexVector("Frame to transmit (success)", frame_to_transmit);
     mockPhy.startTransmitResult = RADIOLIB_ERR_NONE; // Simulate success
@@ -518,13 +330,24 @@ int main() {
 
 
     std::cout << "All IoHomeNode Transmit tests completed." << std::endl;
+}
+
+void runRadioReceiveTests() {
+    IoHomeTestFixture fx; // All values initialized once here
+
+    MockPhysicalLayer mockPhy;
+    IoHomeChannel_t test_channel = {868, 95}; // e.g., 868.95 MHz
+    IoHomeNode ioHomeNode_tx_test(&mockPhy, &test_channel);
+    float epsilon = 0.00001; // Epsilon for floating-point comparison
+
+    std::vector<uint8_t> no_payload_vec = {};
 
     std::cout << "\nStarting IoHomeNode Receive tests..." << std::endl;
 
     // Test case 26: Receive a valid frame successfully
     std::vector<uint8_t> valid_rx_payload = {0xDE, 0xAD, 0xBE, 0xEF};
     std::vector<uint8_t> valid_rx_frame = IoHomeNode::buildFrame(
-        test_ctrl0_base, test_ctrl1, test_src_mac, test_dest_mac, test_cmd_id, valid_rx_payload
+        fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, valid_rx_payload
     );
     printHexVector("Valid RX Frame (expected)", valid_rx_frame);
     mockPhy.rxBufferInternal = valid_rx_frame;
@@ -532,8 +355,8 @@ int main() {
     mockPhy.startReceiveResult = RADIOLIB_ERR_NONE; // Simulate radio successfully entering RX mode
     mockPhy.readDataResult = RADIOLIB_ERR_NONE;     // Simulate successful read
 
-    IoHomeFrame_t receivedFrame1;
-    int16_t rx_result_success = ioHomeNode_tx_test.receiveFrame(receivedFrame1); // ioHomeNode_tx_test shares same mockPhy and channel
+    IoHomeFrame_t receivedFrame1; // Declare receivedFrame1 here
+        int16_t rx_result_success = ioHomeNode_tx_test.receiveFrame(receivedFrame1);
     runTest("receiveFrame (success) - return code", rx_result_success == RADIOLIB_ERR_NONE,
             "Receive return code mismatch", rx_result_success, (int16_t)RADIOLIB_ERR_NONE);
     runTest("receiveFrame (success) - frame valid", receivedFrame1.isValid);
@@ -541,10 +364,10 @@ int main() {
             "CTRL0 mismatch", receivedFrame1.ctrlByte0, valid_rx_frame[IOHOME_CTRLBYTE0_POS]);
     runTest("receiveFrame (success) - Payload", receivedFrame1.payload == valid_rx_payload);
     if (!(receivedFrame1.payload == valid_rx_payload)) {
-        printHexVector("    Expected payload", valid_rx_payload);
-        printHexVector("    Actual payload", receivedFrame1.payload);
+        printHexVector("    Expected payload", valid_rx_payload); // Corrected variable name
+        printHexVector("    Actual payload", receivedFrame1.payload); // Corrected variable name
     }
-    runTest("receiveFrame (success) - frequency set", mockPhy.actualFrequencySet == (test_channel.c0 + test_channel.c1 / 100.0),
+    runTest("receiveFrame (success) - frequency set", std::abs(mockPhy.actualFrequencySet - (test_channel.c0 + test_channel.c1 / 100.0)) < epsilon,
             "Frequency set mismatch", mockPhy.actualFrequencySet, (test_channel.c0 + test_channel.c1 / 100.0));
 
     // Test case 27: Receive frame, but CRC is corrupted (parseFrame fails)
@@ -612,7 +435,24 @@ int main() {
             "Receive return code mismatch", rx_result_too_short, (int16_t)RADIOLIB_ERR_CRC_MISMATCH);
     runTest("receiveFrame (too short) - frame invalid", !receivedFrame6.isValid);
 
+}
 
+int main() {
+    std::cout << "Starting IoHomeNode CRC16 tests..." << std::endl;
+    runCRCTests();
+    std::cout << "All IoHomeNode CRC16 tests completed." << std::endl;
+
+
+    std::cout << "\nStarting IoHomeNode Frame Utility tests..." << std::endl;
+    runFrameTests();
+    std::cout << "All IoHomeNode Frame Parsing tests completed." << std::endl;
+
+    std::cout << "\nStarting IoHomeNode Transmit tests..." << std::endl;
+    runRadioTransmitTests();
+    std::cout << "All IoHomeNode Transmit tests completed." << std::endl;
+
+    std::cout << "\nStarting IoHomeNode Receive tests..." << std::endl;
+    runRadioReceiveTests();
     std::cout << "All IoHomeNode Receive tests completed." << std::endl;
 
     return 0;
