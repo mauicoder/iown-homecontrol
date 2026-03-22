@@ -10,21 +10,47 @@
 IoHomeNode::IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel_param)
   : _phyLayer(phy),
     _channel(channel_param),
-    _sequence_counter(0) { // <--- ADD THIS
+    _source_node_id({0, 0, 0}),      // Initialize NodeIDs to zero
+    _destination_node_id({0, 0, 0}),
+    _sequence_counter(0) {           // Ensure counter starts at 0
 
-    // Initialize stack key with zeros or a default
+    // Initialize security keys with zeros to avoid garbage memory
     std::fill(std::begin(_stack_key), std::end(_stack_key), 0x00);
+    std::fill(std::begin(_system_key), std::end(_system_key), 0x00);
 }
 
-void IoHomeNode::begin(const IoHomeChannel_t* channel, NodeId source_id, NodeId dest_id, uint8_t* stack, uint8_t* system) {
+void IoHomeNode::begin(const IoHomeChannel_t* channel,
+                       NodeId source_node_id,
+                       NodeId destination_node_id,
+                       uint8_t* stack_key,
+                       uint8_t* system_key) {
     this->_channel = channel;
-    this->_source_node_id = source_id;
-    this->_destination_node_id = dest_id;
+    this->_source_node_id = source_node_id;
+    this->_destination_node_id = destination_node_id;
 
-    if(stack) std::copy(stack, stack + 16, this->_stack_key);
-    if(system) std::copy(system, system + 16, this->_system_key);
+    if (stack_key != nullptr) {
+        std::copy(stack_key, stack_key + 16, this->_stack_key);
+    }
+    if (system_key != nullptr) {
+        std::copy(system_key, system_key + 16, this->_system_key);
+    }
 
-    this->setPhyProperties();
+    this->_sequence_counter = 0;
+
+    // --- Physical Layer Configuration ---
+    if (this->_phyLayer != nullptr && this->_channel != nullptr) {
+        // Convert {868, 95} -> 868.95
+        float freq_mhz = (float)this->_channel->c0 + ((float)this->_channel->c1 / 100.0f);
+
+        // RadioLib Standard configuration
+        this->_phyLayer->setFrequency(freq_mhz);
+        this->_phyLayer->setBitRate(38.4);
+        this->_phyLayer->setFrequencyDeviation(19.2);
+
+        // iohc standard sync word
+        uint8_t syncWord[] = {0x55, 0x55};
+        this->_phyLayer->setSyncWord(syncWord, 2);
+    }
 }
 
 int16_t IoHomeNode::setPhyProperties() {
@@ -202,27 +228,15 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
 
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
     Serial.printf("[IoHomeNode::parseFrame] Attempting to parse frame of length: %u\n", (unsigned int)frameLength);
-    Serial.printf("[IoHomeNode::parseFrame] Raw frame: ");
-    for (size_t i = 0; i < frameLength; ++i) {
-        Serial.printf("%02X ", frame[i]);
-    }
-    Serial.println("");
 #endif
 
     // 1. Basic structural length check
-    // Min frame: Header(8) + Cmd(1) + Security(8) + CRC(2) = 19 bytes
     if (frameLength < 19) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.println("[IoHomeNode::parseFrame] Frame too short for Layer 3.");
-#endif
         return false;
     }
 
     // 2. Validate CRC
     if (!IoHomeNode::validateFrameCrc(frame, frameLength)) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.println("[IoHomeNode::parseFrame] CRC validation failed.");
-#endif
         return false;
     }
 
@@ -243,18 +257,12 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     parsedFrame.commandId = frame[offset++];
 
     // 5. Length Validation from CTRL0
-    // IOHOME_MSG_LEN is typically ((frame[0] & 0x1F) + 1)
     size_t declared_msg_body_len = IOHOME_MSG_LEN(frame);
-
     if (declared_msg_body_len != (frameLength - IOHOME_FRAME_CRC_LEN)) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.println("[IoHomeNode::parseFrame] Inconsistent length bits.");
-#endif
         return false;
     }
 
     // 6. Calculate Payload Length (Layer 3)
-    // Overhead = Header(8) + Cmd(1) + SecurityFooter(8) = 17 bytes
     const size_t security_footer_len = 8;
     const size_t fixed_overhead = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + security_footer_len;
 
@@ -262,39 +270,53 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     if (declared_msg_body_len >= fixed_overhead) {
         expected_payload_len = declared_msg_body_len - fixed_overhead;
     } else {
-        return false; // Frame is too small to contain a security footer
+        return false;
     }
 
     // 7. Extract Payload
     if (expected_payload_len > 0) {
         parsedFrame.payload.resize(expected_payload_len);
         std::copy(frame + offset, frame + offset + expected_payload_len, parsedFrame.payload.begin());
-
-        // IMPORTANT: Advance offset past the payload
         offset += expected_payload_len;
-
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.printf("[IoHomeNode::parseFrame] Parsed payload (len %u): ", (unsigned int)expected_payload_len);
-        for (uint8_t b : parsedFrame.payload) Serial.printf("%02X ", b);
-        Serial.println("");
-#endif
     }
 
-    // 8. Extract Security Footer (Counter + MAC)
+    // 8. Extract & Verify Security Footer (Counter + MAC)
     // Offset is now correctly pointing to the 2-byte counter
-    uint16_t frameCounter = IoHomeNode::ntoh<uint16_t>((uint8_t*)frame + offset);
-    (void)frameCounter; // Tells the Mac compiler "I know this might not be used here"
+    uint16_t rxCounter = (frame[offset] << 8) | frame[offset + 1];
     offset += 2;
 
-    uint8_t frameMac[6];
-    std::copy(frame + offset, frame + offset + 6, frameMac);
-    offset += 6;
+    uint8_t rxMac[6];
+    std::copy(frame + offset, frame + offset + 6, rxMac);
+    // Note: No need to increment offset further, we are at the CRC which was already checked.
 
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::parseFrame] Security: Counter=0x%04X, MAC=", frameCounter);
-    for(int i = 0; i < 6; i++) Serial.printf("%02X ", frameMac[i]);
-    Serial.println("");
-#endif
+    // --- CRYPTOGRAPHIC VERIFICATION ---
+    mbedtls_aes_context aes;
+    mbedtls_aes_init(&aes);
+    mbedtls_aes_setkey_enc(&aes, this->_stack_key, 128);
+
+    uint8_t input_block[16] = {0};
+    // Re-verify the first 8 bytes (Header), Command, and Counter
+    for(int i = 0; i < 8; i++) { input_block[i] = frame[i]; }
+    input_block[8] = parsedFrame.commandId;
+    input_block[9] = (uint8_t)(rxCounter >> 8);
+    input_block[10] = (uint8_t)(rxCounter & 0xFF);
+
+    uint8_t expected_block[16] = {0};
+    mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, input_block, expected_block);
+
+    bool macMatch = true;
+    for (int i = 0; i < 6; i++) {
+        if (rxMac[i] != expected_block[i]) {
+            macMatch = false;
+            break;
+        }
+    }
+    mbedtls_aes_free(&aes);
+
+    if (!macMatch) {
+        parsedFrame.isValid = false;
+        return false;
+    }
 
     // Success
     parsedFrame.isValid = true;

@@ -256,7 +256,7 @@ void runFrameTests()
       fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, no_payload_vec
     );
     printHexVector("Frame to parse (no payload)", parsed_frame_no_payload);
-    bool parse_result_no_payload = IoHomeNode::parseFrame(parsed_frame_no_payload.data(), parsed_frame_no_payload.size(), parsed_frame);
+    bool parse_result_no_payload = fx.node.parseFrame(parsed_frame_no_payload.data(), parsed_frame_no_payload.size(), parsed_frame);
     runTest("parseFrame (no payload) - overall result", parse_result_no_payload);
     runTest("parseFrame (no payload) - isValid flag", parsed_frame.isValid);
     runTest("parseFrame (no payload) - CTRL0", parsed_frame.ctrlByte0 == parsed_frame_no_payload[IOHOME_CTRLBYTE0_POS],
@@ -279,7 +279,7 @@ void runFrameTests()
       fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, small_payload_vec
     );
     printHexVector("Frame to parse (small payload)", parsed_frame_small_payload);
-    bool parse_result_small_payload = IoHomeNode::parseFrame(parsed_frame_small_payload.data(), parsed_frame_small_payload.size(), parsed_frame);
+    bool parse_result_small_payload = fx.node.parseFrame(parsed_frame_small_payload.data(), parsed_frame_small_payload.size(), parsed_frame);
     runTest("parseFrame (small payload) - overall result", parse_result_small_payload);
     runTest("parseFrame (small payload) - isValid flag", parsed_frame.isValid);
     runTest("parseFrame (small payload) - Payload size", parsed_frame.payload.size() == small_payload_vec.size(),
@@ -295,7 +295,7 @@ void runFrameTests()
       fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, max_payload_vec
     );
     printHexVector("Frame to parse (max payload)", parsed_frame_max_payload);
-    bool parse_result_max_payload = IoHomeNode::parseFrame(parsed_frame_max_payload.data(), parsed_frame_max_payload.size(), parsed_frame);
+    bool parse_result_max_payload = fx.node.parseFrame(parsed_frame_max_payload.data(), parsed_frame_max_payload.size(), parsed_frame);
     runTest("parseFrame (max payload) - overall result", parse_result_max_payload);
     runTest("parseFrame (max payload) - isValid flag", parsed_frame.isValid);
     runTest("parseFrame (max payload) - Payload size", parsed_frame.payload.size() == max_payload_vec.size(),
@@ -310,14 +310,14 @@ void runFrameTests()
     std::vector<uint8_t> corrupted_crc_frame = parsed_frame_small_payload;
     corrupted_crc_frame[corrupted_crc_frame.size() - 1] ^= 0x01; // Corrupt last byte of CRC
     printHexVector("Frame to parse (corrupted CRC)", corrupted_crc_frame);
-    bool parse_result_corrupted_crc = IoHomeNode::parseFrame(corrupted_crc_frame.data(), corrupted_crc_frame.size(), parsed_frame);
+    bool parse_result_corrupted_crc = fx.node.parseFrame(corrupted_crc_frame.data(), corrupted_crc_frame.size(), parsed_frame);
     runTest("parseFrame (corrupted CRC) - overall result", !parse_result_corrupted_crc);
     runTest("parseFrame (corrupted CRC) - isValid flag", !parsed_frame.isValid);
 
     // Test case 22: Parse a frame that is too short (less than min header + cmd + CRC)
     std::vector<uint8_t> too_short_frame = {0x01, 0x02, 0x03, 0x04}; // Arbitrary short data
     printHexVector("Frame to parse (too short)", too_short_frame);
-    bool parse_result_too_short = IoHomeNode::parseFrame(too_short_frame.data(), too_short_frame.size(), parsed_frame);
+    bool parse_result_too_short = fx.node.parseFrame(too_short_frame.data(), too_short_frame.size(), parsed_frame);
     runTest("parseFrame (too short) - overall result", !parse_result_too_short);
     runTest("parseFrame (too short) - isValid flag", !parsed_frame.isValid);
 
@@ -326,7 +326,7 @@ void runFrameTests()
     std::vector<uint8_t> inconsistent_len_frame = parsed_frame_small_payload;
     inconsistent_len_frame[IOHOME_CTRLBYTE0_POS] = (inconsistent_len_frame[IOHOME_CTRLBYTE0_POS] & ~0x1F) | (0x02 - 1); // Declares length of 2, but frame has more
     printHexVector("Frame to parse (inconsistent declared length)", inconsistent_len_frame);
-    bool parse_result_inconsistent_len = IoHomeNode::parseFrame(inconsistent_len_frame.data(), inconsistent_len_frame.size(), parsed_frame);
+    bool parse_result_inconsistent_len = fx.node.parseFrame(inconsistent_len_frame.data(), inconsistent_len_frame.size(), parsed_frame);
     runTest("parseFrame (inconsistent declared length) - overall result", !parse_result_inconsistent_len);
     runTest("parseFrame (inconsistent declared length) - isValid flag", !parsed_frame.isValid);
 
@@ -525,8 +525,31 @@ void runBuildingTests() {
     std::cout << "Building Tests completed." << std::endl;
 }
 
+void testCaseSecurityTamper() {
+    IoHomeTestFixture fx;
+
+    // 1. Build a valid frame
+    std::vector<uint8_t> payload = {0x11, 0x22};
+    auto frame = fx.node.buildFrame(fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, 0x01, payload);
+
+    // 2. TAMPER with the MAC
+    // MAC is 6 bytes located right before the 2-byte CRC.
+    // Let's flip bits in one of those bytes.
+    frame[frame.size() - 5] ^= 0xFF;
+
+    // 3. Try to parse
+    IoHomeFrame_t parsed;
+    bool result = fx.node.parseFrame(frame.data(), frame.size(), parsed);
+
+    // 4. THIS SHOULD BE FALSE
+    runTest("parseFrame - reject tampered MAC", result == false,
+            "SECURITY BREACH: Parser accepted a bad MAC!", 0, 1);
+    runTest("parseFrame - isValid is false on tamper", parsed.isValid == false);
+}
 
 int main() {
+
+    testCaseSecurityTamper();
 
     runBuildingTests();
 

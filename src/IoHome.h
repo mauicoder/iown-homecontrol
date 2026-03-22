@@ -124,7 +124,7 @@ class IoHomeNode {
       uint8_t commandId, const std::vector<uint8_t>& payload
     );
 
-    static bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
+    bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
 
     // Template helpers (Must be in header)
     template<typename T>
