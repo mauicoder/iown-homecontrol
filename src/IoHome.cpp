@@ -1,5 +1,6 @@
 #include "IoHome.h"
 #include <RadioLib.h>
+#include <mbedtls/aes.h>
 #include "TypeDef.h"
 #include "protocols/PhysicalLayer/PhysicalLayer.h"
 #include "debug_iohome.h" // For conditional Serial.printf
@@ -155,10 +156,32 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   frame[offset++] = (uint8_t)((this->_sequence_counter >> 8) & 0xFF); // High Byte
   frame[offset++] = (uint8_t)(this->_sequence_counter & 0xFF);        // Low Byte
 
-  // B: Insert the 6-byte MAC (Signature) - Leaving as Zeros for now
-  for(int i = 0; i < IOHOME_SECURITY_MAC_LEN; i++) {
-    frame[offset++] = 0x00;
+// --- LAYER 3: AES-128 MAC (Message Authentication Code) ---
+  mbedtls_aes_context aes;
+  mbedtls_aes_init(&aes);
+
+  // 1. Load the 16-byte Stack Key
+  mbedtls_aes_setkey_enc(&aes, this->_stack_key, 128);
+
+  // 2. Prepare the Input Block (16 bytes)
+  // Per io-homecontrol: MAC = AES128(Header[8] | Command[1] | Counter[2] | Padding[5])
+  uint8_t input_block[16] = {0};
+  std::copy(frame.begin(), frame.begin() + 8, input_block);     // Header
+  input_block[8] = commandId;                                   // Command
+  input_block[9] = (uint8_t)(this->_sequence_counter >> 8);     // Counter High
+  input_block[10] = (uint8_t)(this->_sequence_counter & 0xFF);  // Counter Low
+  // Bytes 11-15 remain 0x00 (standard padding)
+
+  // 3. Encrypt the block
+  uint8_t output_block[16] = {0};
+  mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, input_block, output_block);
+
+  // 4. Extract 6 bytes and insert into frame
+  for (int i = 0; i < IOHOME_SECURITY_MAC_LEN; i++) {
+      frame[offset++] = output_block[i];
   }
+
+  mbedtls_aes_free(&aes);
 
   // CRC
   uint16_t calculatedCrc = IoHomeNode::crc16(frame.data(), messageBodyLen);

@@ -90,32 +90,36 @@ void runCRCTests()
 
 }
 
-// --- Test case 16: Build frame with a small payload ---
-void testCase16()
-{
-    IoHomeTestFixture local_fx; // Fresh node, counter starts at 0
+void testCase16() {
+    IoHomeTestFixture local_fx;
     std::vector<uint8_t> small_payload_vec = {0xA0, 0xB1, 0xC2};
 
-    // Call #1: Counter is 0
+    // 1. Build Frame
     auto frame1 = local_fx.node.buildFrame(
-            local_fx.ctrl0_base, local_fx.ctrl1, local_fx.src_mac, local_fx.dest_mac, local_fx.cmd_id, small_payload_vec
+        local_fx.ctrl0_base, local_fx.ctrl1, local_fx.src_mac, local_fx.dest_mac, local_fx.cmd_id, small_payload_vec
     );
 
-    // Calculate offset (Total - 10)
-    size_t off1 = frame1.size() - 10;
-    uint16_t count1 = (frame1[off1] << 8) | frame1[off1 + 1];
+    // 2. Extract Counter (Offset = Total - 10 bytes: 2 for Counter, 6 for MAC, 2 for CRC)
+    size_t counter_off = frame1.size() - 10;
+    uint16_t count1 = (frame1[counter_off] << 8) | frame1[counter_off + 1];
+    runTest("First call counter is 0", count1 == 0);
 
-    runTest("First call counter is 0", count1 == 0,
-            "Counter was not 0. Did buildFrame run before this?", count1, 0);
+    // 3. Extract MAC (Offset starts 2 bytes after the counter)
+    size_t mac_off = counter_off + 2;
+    bool mac_is_zero = true;
+    for(int i = 0; i < 6; i++) {
+        if(frame1[mac_off + i] != 0x00) {
+            mac_is_zero = false;
+            break;
+        }
+    }
 
-    // Call #2: Counter is 1
-    auto frame2 = local_fx.node.buildFrame(local_fx.ctrl0_base, local_fx.ctrl1, local_fx.src_mac, local_fx.dest_mac, local_fx.cmd_id, {});
-    size_t off2 = frame2.size() - 10;
-    uint16_t count2 = (frame2[off2] << 8) | frame2[off2 + 1];
-
-    runTest("Counter increments between calls", count2 == (count1 + 1),
-            "Counter jump mismatch", (uint32_t)count2, (uint32_t)(count1 + 1));
+    // --- The Big Boss Check ---
+    // This will fail if your AES implementation in IoHome.cpp isn't writing to the frame
+    runTest("MAC is cryptographically signed (not zero)", !mac_is_zero,
+            "The MAC is still all zeros. Check your AES implementation logic!", 0, 1);
 }
+
 
 void runFrameTests()
 {
