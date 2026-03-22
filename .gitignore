@@ -91,3 +91,6 @@ $RECYCLE.BIN/
 .idea/**/markdown-navigator-enh.xml
 .idea/**/markdown-navigator/
 .aider*
+
+# Ignore object files
+*.o
