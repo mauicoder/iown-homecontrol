@@ -89,7 +89,7 @@ struct IoHomeFrame_t {
   NodeId destMac;
   uint8_t commandId;
   std::vector<uint8_t> payload;
-  bool isValid; // Indicates if the frame was successfully parsed and CRC validated
+  bool isValid = false; // Indicates if the frame was successfully parsed and CRC validated
 };
 
 /*!

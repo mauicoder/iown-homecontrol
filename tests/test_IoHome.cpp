@@ -23,6 +23,8 @@
 
 void runCRCTests()
 {
+    std::cout << "Starting IoHomeNode CRC16 tests..." << std::endl;
+
     // Test case 1: Empty data
     std::vector<uint8_t> data1 = {};
     uint16_t expected_crc1 = 0x0000;
@@ -83,10 +85,15 @@ void runCRCTests()
     uint16_t expected_crc10 = 0x07FC; // Corrected expected value for CRC-16/KERMIT
     uint16_t actual_crc10 = IoHomeNode::crc16(data10.data(), data10.size());
     runTest("Longer string 'The quick brown fox...'", actual_crc10 == expected_crc10, "", actual_crc10, expected_crc10);
+
+    std::cout << "All IoHomeNode CRC16 tests completed." << std::endl;
+
 }
 
 void runFrameTests()
 {
+    std::cout << "\nStarting IoHomeNode Frame Utility tests..." << std::endl;
+
     IoHomeTestFixture fx; // All values initialized once here
 
     // --- Test IOHOME_MSG_LEN macro ---
@@ -291,10 +298,15 @@ void runFrameTests()
     bool parse_result_inconsistent_len = IoHomeNode::parseFrame(inconsistent_len_frame.data(), inconsistent_len_frame.size(), parsed_frame);
     runTest("parseFrame (inconsistent declared length) - overall result", !parse_result_inconsistent_len);
     runTest("parseFrame (inconsistent declared length) - isValid flag", !parsed_frame.isValid);
+
+    std::cout << "All IoHomeNode Frame Parsing tests completed." << std::endl;
+
 }
 
 void runRadioTransmitTests()
 {
+    std::cout << "\nStarting IoHomeNode Transmit tests..." << std::endl;
+
     IoHomeTestFixture fx; // All values initialized once here
 
     MockPhysicalLayer mockPhy;
@@ -333,127 +345,119 @@ void runRadioTransmitTests()
 }
 
 void runRadioReceiveTests() {
-    IoHomeTestFixture fx; // All values initialized once here
+  std::cout << "\nStarting IoHomeNode Receive tests..." << std::endl;
 
-    MockPhysicalLayer mockPhy;
-    IoHomeChannel_t test_channel = {868, 95}; // e.g., 868.95 MHz
-    IoHomeNode ioHomeNode_tx_test(&mockPhy, &test_channel);
-    float epsilon = 0.00001; // Epsilon for floating-point comparison
+  IoHomeTestFixture fx; // All values initialized once here
 
-    std::vector<uint8_t> no_payload_vec = {};
+  MockPhysicalLayer mockPhy;
+  IoHomeChannel_t test_channel = {868, 95}; // e.g., 868.95 MHz
+  IoHomeNode ioHomeNode_tx_test(&mockPhy, &test_channel);
+  float epsilon = 0.0001f; // Epsilon for floating-point comparison
+  std::vector<uint8_t> no_payload_vec = {};
 
-    std::cout << "\nStarting IoHomeNode Receive tests..." << std::endl;
+  // Test case 26: Receive a valid frame successfully
+  std::vector<uint8_t> valid_rx_payload = {0xDE, 0xAD, 0xBE, 0xEF};
+  std::vector<uint8_t> valid_rx_frame = IoHomeNode::buildFrame(
+      fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, valid_rx_payload
+  );
+  printHexVector("Valid RX Frame (expected)", valid_rx_frame);
+  mockPhy.rxBufferInternal = valid_rx_frame;
+  mockPhy.mockPacketLength = valid_rx_frame.size();
+  mockPhy.startReceiveResult = RADIOLIB_ERR_NONE; // Simulate radio successfully entering RX mode
+  mockPhy.readDataResult = RADIOLIB_ERR_NONE;     // Simulate successful read
 
-    // Test case 26: Receive a valid frame successfully
-    std::vector<uint8_t> valid_rx_payload = {0xDE, 0xAD, 0xBE, 0xEF};
-    std::vector<uint8_t> valid_rx_frame = IoHomeNode::buildFrame(
-        fx.ctrl0_base, fx.ctrl1, fx.src_mac, fx.dest_mac, fx.cmd_id, valid_rx_payload
-    );
-    printHexVector("Valid RX Frame (expected)", valid_rx_frame);
-    mockPhy.rxBufferInternal = valid_rx_frame;
-    mockPhy.mockPacketLength = valid_rx_frame.size();
-    mockPhy.startReceiveResult = RADIOLIB_ERR_NONE; // Simulate radio successfully entering RX mode
-    mockPhy.readDataResult = RADIOLIB_ERR_NONE;     // Simulate successful read
+  IoHomeFrame_t receivedFrame1; // Declare receivedFrame1 here
+      int16_t rx_result_success = ioHomeNode_tx_test.receiveFrame(receivedFrame1);
+  runTest("receiveFrame (success) - return code", rx_result_success == RADIOLIB_ERR_NONE,
+          "Receive return code mismatch", rx_result_success, (int16_t)RADIOLIB_ERR_NONE);
+  runTest("receiveFrame (success) - frame valid", receivedFrame1.isValid);
+  runTest("receiveFrame (success) - CTRL0", receivedFrame1.ctrlByte0 == valid_rx_frame[IOHOME_CTRLBYTE0_POS],
+          "CTRL0 mismatch", receivedFrame1.ctrlByte0, valid_rx_frame[IOHOME_CTRLBYTE0_POS]);
+  runTest("receiveFrame (success) - Payload", receivedFrame1.payload == valid_rx_payload);
+  if (!(receivedFrame1.payload == valid_rx_payload)) {
+      printHexVector("    Expected payload", valid_rx_payload); // Corrected variable name
+      printHexVector("    Actual payload", receivedFrame1.payload); // Corrected variable name
+  }
+  runTest("receiveFrame (success) - frequency set", std::abs(mockPhy.actualFrequencySet - (test_channel.c0 + test_channel.c1 / 100.0)) < epsilon,
+          "Frequency set mismatch", mockPhy.actualFrequencySet, (test_channel.c0 + test_channel.c1 / 100.0));
 
-    IoHomeFrame_t receivedFrame1; // Declare receivedFrame1 here
-        int16_t rx_result_success = ioHomeNode_tx_test.receiveFrame(receivedFrame1);
-    runTest("receiveFrame (success) - return code", rx_result_success == RADIOLIB_ERR_NONE,
-            "Receive return code mismatch", rx_result_success, (int16_t)RADIOLIB_ERR_NONE);
-    runTest("receiveFrame (success) - frame valid", receivedFrame1.isValid);
-    runTest("receiveFrame (success) - CTRL0", receivedFrame1.ctrlByte0 == valid_rx_frame[IOHOME_CTRLBYTE0_POS],
-            "CTRL0 mismatch", receivedFrame1.ctrlByte0, valid_rx_frame[IOHOME_CTRLBYTE0_POS]);
-    runTest("receiveFrame (success) - Payload", receivedFrame1.payload == valid_rx_payload);
-    if (!(receivedFrame1.payload == valid_rx_payload)) {
-        printHexVector("    Expected payload", valid_rx_payload); // Corrected variable name
-        printHexVector("    Actual payload", receivedFrame1.payload); // Corrected variable name
-    }
-    runTest("receiveFrame (success) - frequency set", std::abs(mockPhy.actualFrequencySet - (test_channel.c0 + test_channel.c1 / 100.0)) < epsilon,
-            "Frequency set mismatch", mockPhy.actualFrequencySet, (test_channel.c0 + test_channel.c1 / 100.0));
+  // Test case 27: Receive frame, but CRC is corrupted (parseFrame fails)
+  std::vector<uint8_t> corrupted_rx_frame = valid_rx_frame;
+  corrupted_rx_frame[corrupted_rx_frame.size() - 1] ^= 0x01; // Corrupt last byte of CRC
+  printHexVector("Corrupted RX Frame", corrupted_rx_frame);
+  mockPhy.rxBufferInternal = corrupted_rx_frame;
+  mockPhy.mockPacketLength = corrupted_rx_frame.size();
+  mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
+  mockPhy.readDataResult = RADIOLIB_ERR_NONE;
 
-    // Test case 27: Receive frame, but CRC is corrupted (parseFrame fails)
-    std::vector<uint8_t> corrupted_rx_frame = valid_rx_frame;
-    corrupted_rx_frame[corrupted_rx_frame.size() - 1] ^= 0x01; // Corrupt last byte of CRC
-    printHexVector("Corrupted RX Frame", corrupted_rx_frame);
-    mockPhy.rxBufferInternal = corrupted_rx_frame;
-    mockPhy.mockPacketLength = corrupted_rx_frame.size();
-    mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
-    mockPhy.readDataResult = RADIOLIB_ERR_NONE;
+  IoHomeFrame_t receivedFrame2;
+  int16_t rx_result_corrupted_crc = ioHomeNode_tx_test.receiveFrame(receivedFrame2);
+  runTest("receiveFrame (corrupted CRC) - return code", rx_result_corrupted_crc == RADIOLIB_ERR_CRC_MISMATCH,
+          "Receive return code mismatch", rx_result_corrupted_crc, (int16_t)RADIOLIB_ERR_CRC_MISMATCH);
+  runTest("receiveFrame (corrupted CRC) - frame invalid", !receivedFrame2.isValid);
 
-    IoHomeFrame_t receivedFrame2;
-    int16_t rx_result_corrupted_crc = ioHomeNode_tx_test.receiveFrame(receivedFrame2);
-    runTest("receiveFrame (corrupted CRC) - return code", rx_result_corrupted_crc == RADIOLIB_ERR_CRC_MISMATCH,
-            "Receive return code mismatch", rx_result_corrupted_crc, (int16_t)RADIOLIB_ERR_CRC_MISMATCH);
-    runTest("receiveFrame (corrupted CRC) - frame invalid", !receivedFrame2.isValid);
+  // Test case 28: Radio fails to start receive mode
+  mockPhy.startReceiveResult = RADIOLIB_ERR_RX_TIMEOUT; // Simulate radio error
+  mockPhy.rxBufferInternal.clear(); // No data to receive
+  mockPhy.mockPacketLength = 0;
+  mockPhy.readDataResult = RADIOLIB_ERR_NONE;
 
-    // Test case 28: Radio fails to start receive mode
-    mockPhy.startReceiveResult = RADIOLIB_ERR_RX_TIMEOUT; // Simulate radio error
-    mockPhy.rxBufferInternal.clear(); // No data to receive
-    mockPhy.mockPacketLength = 0;
-    mockPhy.readDataResult = RADIOLIB_ERR_NONE;
+  IoHomeFrame_t receivedFrame3;
+  int16_t rx_result_radio_fail = ioHomeNode_tx_test.receiveFrame(receivedFrame3);
+  runTest("receiveFrame (radio fail) - return code", rx_result_radio_fail == RADIOLIB_ERR_RX_TIMEOUT,
+          "Receive return code mismatch", rx_result_radio_fail, (int16_t)RADIOLIB_ERR_RX_TIMEOUT);
+  runTest("receiveFrame (radio fail) - frame invalid", !receivedFrame3.isValid);
 
-    IoHomeFrame_t receivedFrame3;
-    int16_t rx_result_radio_fail = ioHomeNode_tx_test.receiveFrame(receivedFrame3);
-    runTest("receiveFrame (radio fail) - return code", rx_result_radio_fail == RADIOLIB_ERR_RX_TIMEOUT,
-            "Receive return code mismatch", rx_result_radio_fail, (int16_t)RADIOLIB_ERR_RX_TIMEOUT);
-    runTest("receiveFrame (radio fail) - frame invalid", !receivedFrame3.isValid);
+  // Test case 29: Radio receives no packet (getPacketLength returns 0)
+  mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
+  mockPhy.rxBufferInternal.clear();
+  mockPhy.mockPacketLength = 0; // Simulate no packet received
+  mockPhy.readDataResult = RADIOLIB_ERR_NONE;
 
-    // Test case 29: Radio receives no packet (getPacketLength returns 0)
-    mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
-    mockPhy.rxBufferInternal.clear();
-    mockPhy.mockPacketLength = 0; // Simulate no packet received
-    mockPhy.readDataResult = RADIOLIB_ERR_NONE;
+  IoHomeFrame_t receivedFrame4;
+  int16_t rx_result_no_packet = ioHomeNode_tx_test.receiveFrame(receivedFrame4);
+  runTest("receiveFrame (no packet) - return code", rx_result_no_packet == RADIOLIB_ERR_RX_TIMEOUT,
+          "Receive return code mismatch", rx_result_no_packet, (int16_t)RADIOLIB_ERR_RX_TIMEOUT);
+  runTest("receiveFrame (no packet) - frame invalid", !receivedFrame4.isValid);
 
-    IoHomeFrame_t receivedFrame4;
-    int16_t rx_result_no_packet = ioHomeNode_tx_test.receiveFrame(receivedFrame4);
-    runTest("receiveFrame (no packet) - return code", rx_result_no_packet == RADIOLIB_ERR_RX_TIMEOUT,
-            "Receive return code mismatch", rx_result_no_packet, (int16_t)RADIOLIB_ERR_RX_TIMEOUT);
-    runTest("receiveFrame (no packet) - frame invalid", !receivedFrame4.isValid);
+  // Test case 30: ReadData fails after packet detected
+  mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
+  mockPhy.rxBufferInternal = valid_rx_frame;
+  mockPhy.mockPacketLength = valid_rx_frame.size();
+  mockPhy.readDataResult = RADIOLIB_ERR_RX_TIMEOUT; // Simulate SPI read failure
 
-    // Test case 30: ReadData fails after packet detected
-    mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
-    mockPhy.rxBufferInternal = valid_rx_frame;
-    mockPhy.mockPacketLength = valid_rx_frame.size();
-    mockPhy.readDataResult = RADIOLIB_ERR_RX_TIMEOUT; // Simulate SPI read failure
+  IoHomeFrame_t receivedFrame5;
+  int16_t rx_result_read_fail = ioHomeNode_tx_test.receiveFrame(receivedFrame5);
+  runTest("receiveFrame (read data fail) - return code", rx_result_read_fail == RADIOLIB_ERR_RX_TIMEOUT,
+          "Receive return code mismatch", rx_result_read_fail, (int16_t)RADIOLIB_ERR_RX_TIMEOUT);
+  runTest("receiveFrame (read data fail) - frame invalid", !receivedFrame5.isValid);
 
-    IoHomeFrame_t receivedFrame5;
-    int16_t rx_result_read_fail = ioHomeNode_tx_test.receiveFrame(receivedFrame5);
-    runTest("receiveFrame (read data fail) - return code", rx_result_read_fail == RADIOLIB_ERR_RX_TIMEOUT,
-            "Receive return code mismatch", rx_result_read_fail, (int16_t)RADIOLIB_ERR_RX_TIMEOUT);
-    runTest("receiveFrame (read data fail) - frame invalid", !receivedFrame5.isValid);
+  // Test case 31: Frame too short to be parsed as io-homecontrol (implicitly handled by parseFrame)
+  std::vector<uint8_t> short_rx_frame = {0x01, 0x02}; // Much shorter than min frame len
+  printHexVector("Short RX Frame", short_rx_frame);
+  mockPhy.rxBufferInternal = short_rx_frame;
+  mockPhy.mockPacketLength = short_rx_frame.size();
+  mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
+  mockPhy.readDataResult = RADIOLIB_ERR_NONE;
 
-    // Test case 31: Frame too short to be parsed as io-homecontrol (implicitly handled by parseFrame)
-    std::vector<uint8_t> short_rx_frame = {0x01, 0x02}; // Much shorter than min frame len
-    printHexVector("Short RX Frame", short_rx_frame);
-    mockPhy.rxBufferInternal = short_rx_frame;
-    mockPhy.mockPacketLength = short_rx_frame.size();
-    mockPhy.startReceiveResult = RADIOLIB_ERR_NONE;
-    mockPhy.readDataResult = RADIOLIB_ERR_NONE;
+  IoHomeFrame_t receivedFrame6;
+  int16_t rx_result_too_short = ioHomeNode_tx_test.receiveFrame(receivedFrame6);
+  runTest("receiveFrame (too short) - return code", rx_result_too_short == RADIOLIB_ERR_CRC_MISMATCH, // parseFrame returns false, which is mapped to CRC_MISMATCH
+          "Receive return code mismatch", rx_result_too_short, (int16_t)RADIOLIB_ERR_CRC_MISMATCH);
+  runTest("receiveFrame (too short) - frame invalid", !receivedFrame6.isValid);
 
-    IoHomeFrame_t receivedFrame6;
-    int16_t rx_result_too_short = ioHomeNode_tx_test.receiveFrame(receivedFrame6);
-    runTest("receiveFrame (too short) - return code", rx_result_too_short == RADIOLIB_ERR_CRC_MISMATCH, // parseFrame returns false, which is mapped to CRC_MISMATCH
-            "Receive return code mismatch", rx_result_too_short, (int16_t)RADIOLIB_ERR_CRC_MISMATCH);
-    runTest("receiveFrame (too short) - frame invalid", !receivedFrame6.isValid);
+  std::cout << "All IoHomeNode Receive tests completed." << std::endl;
 
 }
 
 int main() {
-    std::cout << "Starting IoHomeNode CRC16 tests..." << std::endl;
     runCRCTests();
-    std::cout << "All IoHomeNode CRC16 tests completed." << std::endl;
 
-
-    std::cout << "\nStarting IoHomeNode Frame Utility tests..." << std::endl;
     runFrameTests();
-    std::cout << "All IoHomeNode Frame Parsing tests completed." << std::endl;
 
-    std::cout << "\nStarting IoHomeNode Transmit tests..." << std::endl;
     runRadioTransmitTests();
-    std::cout << "All IoHomeNode Transmit tests completed." << std::endl;
 
-    std::cout << "\nStarting IoHomeNode Receive tests..." << std::endl;
     runRadioReceiveTests();
-    std::cout << "All IoHomeNode Receive tests completed." << std::endl;
 
     return 0;
 }
