@@ -342,7 +342,12 @@ void runRadioTransmitTests()
 
     MockPhysicalLayer mockPhy;
     IoHomeChannel_t test_channel = {868, 95}; // e.g., 868.95 MHz
+    uint8_t stack_key[16] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10};
+    uint8_t system_key[16] = {0}; // All zeros is fine for a dummy system key
+
     IoHomeNode ioHomeNode_tx_test(&mockPhy, &test_channel);
+    ioHomeNode_tx_test.begin(&test_channel, fx.src_mac, fx.dest_mac, stack_key, system_key);
+
 
     std::vector<uint8_t> no_payload_vec = {};
 
@@ -353,7 +358,7 @@ void runRadioTransmitTests()
     printHexVector("Frame to transmit (success)", frame_to_transmit);
     mockPhy.startTransmitResult = RADIOLIB_ERR_NONE; // Simulate success
     int16_t tx_result_success = ioHomeNode_tx_test.transmitFrame(frame_to_transmit);
-    runTest("transmitFrame (success) - return code", tx_result_success == RADIOLIB_ERR_NONE,
+    runTest("transmitFrame (success) - return code 2", tx_result_success == RADIOLIB_ERR_NONE,
             "Transmit return code mismatch", tx_result_success, (int16_t)RADIOLIB_ERR_NONE);
     float expected_freq = (test_channel.c0 + test_channel.c1 / 100.0);
     float actual_freq_set = mockPhy.actualFrequencySet;
@@ -383,7 +388,17 @@ void runRadioReceiveTests() {
   MockPhysicalLayer mockPhy;
   IoHomeChannel_t test_channel = {868, 95}; // e.g., 868.95 MHz
   IoHomeNode ioHomeNode_tx_test(&mockPhy, &test_channel);
+
+  // Dummy 16-byte keys for testing
+  uint8_t stack_key[16] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10};
+  uint8_t system_key[16] = {0}; // All zeros is fine for a dummy system key
   float epsilon = 0.0001f; // Epsilon for floating-point comparison
+
+  ioHomeNode_tx_test.begin(&test_channel, fx.src_mac, fx.dest_mac, stack_key, system_key);
+
+  // This ensures buildFrame uses the key the receiver expects!
+  fx.node.begin(&test_channel, fx.src_mac, fx.dest_mac, stack_key, system_key);
+
   std::vector<uint8_t> no_payload_vec = {};
 
   // Test case 26: Receive a valid frame successfully

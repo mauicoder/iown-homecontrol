@@ -19,11 +19,12 @@ IoHomeNode::IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel_param)
     std::fill(std::begin(_system_key), std::end(_system_key), 0x00);
 }
 
-void IoHomeNode::begin(const IoHomeChannel_t* channel,
-                       NodeId source_node_id,
-                       NodeId destination_node_id,
-                       uint8_t* stack_key,
-                       uint8_t* system_key) {
+int16_t IoHomeNode::begin(const IoHomeChannel_t* channel,
+                         NodeId source_node_id,
+                         NodeId destination_node_id,
+                         uint8_t* stack_key,
+                         uint8_t* system_key) {
+    // 1. Core Data Setup
     this->_channel = channel;
     this->_source_node_id = source_node_id;
     this->_destination_node_id = destination_node_id;
@@ -37,20 +38,37 @@ void IoHomeNode::begin(const IoHomeChannel_t* channel,
 
     this->_sequence_counter = 0;
 
-    // --- Physical Layer Configuration ---
-    if (this->_phyLayer != nullptr && this->_channel != nullptr) {
-        // Convert {868, 95} -> 868.95
-        float freq_mhz = (float)this->_channel->c0 + ((float)this->_channel->c1 / 100.0f);
-
-        // RadioLib Standard configuration
-        this->_phyLayer->setFrequency(freq_mhz);
-        this->_phyLayer->setBitRate(38.4);
-        this->_phyLayer->setFrequencyDeviation(19.2);
-
-        // iohc standard sync word
-        uint8_t syncWord[] = {0x55, 0x55};
-        this->_phyLayer->setSyncWord(syncWord, 2);
+    // 2. Physical Layer Configuration
+    if (this->_phyLayer == nullptr || this->_channel == nullptr) {
+        return RADIOLIB_ERR_CHIP_NOT_FOUND; // Or a custom "Not Initialized" error
     }
+
+    int16_t state = RADIOLIB_ERR_NONE;
+
+    // Convert {868, 95} -> 868.95
+    float freq_mhz = (float)this->_channel->c0 + ((float)this->_channel->c1 / 100.0f);
+
+    // Set Frequency
+    state = this->_phyLayer->setFrequency(freq_mhz);
+    if (state != RADIOLIB_ERR_NONE) return state;
+
+    // Set Bit Rate (io-homecontrol uses 38.4 kbps)
+    state = this->_phyLayer->setBitRate(38.4);
+    if (state != RADIOLIB_ERR_NONE) return state;
+
+    // Set Frequency Deviation (19.2 kHz)
+    state = this->_phyLayer->setFrequencyDeviation(19.2);
+    if (state != RADIOLIB_ERR_NONE) return state;
+
+    // Set Sync Word (0x55 0x55 is the standard preamble/sync for iohc)
+    uint8_t syncWord[] = {0x55, 0x55};
+    state = this->_phyLayer->setSyncWord(syncWord, 2);
+    if (state != RADIOLIB_ERR_NONE) return state;
+
+    // Optional: Set Rx Bandwidth if supported by the chip
+    // state = this->_phyLayer->setRxBandwidth(156.2);
+
+    return RADIOLIB_ERR_NONE; // Everything initialized perfectly
 }
 
 int16_t IoHomeNode::setPhyProperties() {
@@ -353,52 +371,34 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
 }
 
 int16_t IoHomeNode::receiveFrame(IoHomeFrame_t& receivedFrame) {
-    float freq = this->_channel->c0 + (this->_channel->c1 / 100.0);
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::receiveFrame] Setting frequency to %.2f MHz (Channel C0:%u, C1:%u)\n", freq, this->_channel->c0, this->_channel->c1);
-#endif
-    // Set frequency according to the current channel
-    int16_t state = this->_phyLayer->setFrequency(freq);
-    RADIOLIB_ASSERT(state);
+    // 1. Check if we are already in RX mode. If not, start it.
+    // (Note: In a real app, you'd track state, but for a simple sniffer:)
 
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.println("[IoHomeNode::receiveFrame] Starting receive mode.");
-#endif
-    // Start receiving
-    state = this->_phyLayer->startReceive();
-    RADIOLIB_ASSERT(state);
-
-    // Wait for a packet
+    // 2. Check if a packet has actually arrived
     size_t packetLength = this->_phyLayer->getPacketLength();
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::receiveFrame] Detected packet length: %u\n", packetLength);
-#endif
+
     if (packetLength == 0) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.println("[IoHomeNode::receiveFrame] No packet received (length 0).");
-#endif
-        return RADIOLIB_ERR_RX_TIMEOUT; // Or some other appropriate error for no packet received
+        // No packet yet. This is normal!
+        // We return a specific code so the caller knows to try again later.
+        return RADIOLIB_ERR_RX_TIMEOUT;
     }
 
+    // 3. We have data! Now we read it.
     std::vector<uint8_t> rxBuffer(packetLength);
-    state = this->_phyLayer->readData(rxBuffer.data(), packetLength);
-    RADIOLIB_ASSERT(state);
+    int16_t state = this->_phyLayer->readData(rxBuffer.data(), packetLength);
 
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::receiveFrame] Read %u bytes from radio.\n", packetLength);
-#endif
+    if (state != RADIOLIB_ERR_NONE) return state;
 
-    // Parse the received frame
-    if (!IoHomeNode::parseFrame(rxBuffer.data(), rxBuffer.size(), receivedFrame)) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.println("[IoHomeNode::receiveFrame] Frame parsing failed or CRC mismatch.");
-#endif
-        return RADIOLIB_ERR_CRC_MISMATCH; // Or a custom error for parsing failure
+    // 4. Parse the bytes we just pulled from the hardware
+    // Note: Use 'this->parseFrame' instead of 'IoHomeNode::parseFrame'
+    // to ensure we use the instance's _stack_key
+    if (!this->parseFrame(rxBuffer.data(), rxBuffer.size(), receivedFrame)) {
+        return RADIOLIB_ERR_CRC_MISMATCH;
     }
 
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.println("[IoHomeNode::receiveFrame] Successfully received and parsed valid frame.");
-#endif
+    // 5. IMPORTANT: Put the radio back into listen mode for the next packet
+    this->_phyLayer->startReceive();
+
     return RADIOLIB_ERR_NONE;
 }
 

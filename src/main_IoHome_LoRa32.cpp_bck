@@ -1,0 +1,58 @@
+#include <Arduino.h>
+#include <SPI.h>
+#include <LoRa32.h>
+#include <RadioLib.h>
+#include "IoHome.h"
+
+// 1. Radio Setup
+LORA32_RADIO radio = new Module(LORA32_SPI_CS, LORA32_RADIO_IO0, LORA32_RADIO_RST, LORA32_RADIO_IO1);
+PhysicalLayer* phy = (PhysicalLayer*)&radio;
+
+// 2. IoHome Setup
+IoHomeChannel_t currentChannel = { 868, 95 }; // 868.95 MHz
+IoHomeNode node(phy, &currentChannel);
+
+// Keys (Replace with your real keys if you have them, otherwise use zeros for sniffing)
+uint8_t stack_key[16] = {0};
+uint8_t system_key[16] = {0};
+NodeId myId = {0x01, 0x02, 0x03};
+NodeId targetId = {0x00, 0x00, 0x00};
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000); // Give serial time to start
+  Serial.println(F("--- iHC Sniffer Starting ---"));
+
+  // Start Radio hardware
+  int state = radio.begin();
+  if(state != RADIOLIB_ERR_NONE) {
+    Serial.print(F("[RADIO] Init Failed: ")); Serial.println(state);
+    while(true);
+  }
+
+  // Initialize the IoHome Logic (this also sets frequency/bitrate)
+  node.begin(&currentChannel, myId, targetId, stack_key, system_key);
+
+  Serial.println(F("[SYSTEM] Ready. Listening on 868.95 MHz..."));
+}
+
+void loop() {
+  IoHomeFrame_t rxFrame;
+
+  // Use the node's loop logic to listen for packets
+  if (node.loop(rxFrame)) {
+      // If we are here, a packet was received!
+      Serial.print(F("[RECV] Cmd: 0x")); Serial.print(rxFrame.commandId, HEX);
+      Serial.print(F(" From: "));
+      Serial.printf("%02X%02X%02X\n", rxFrame.sourceMac.n0, rxFrame.sourceMac.n1, rxFrame.sourceMac.n2);
+
+      if (!rxFrame.isValid) {
+          Serial.println(F("  -> Security check failed (Check your Stack Key)"));
+      } else {
+          Serial.println(F("  -> Security Verified! Message is authentic."));
+      }
+  }
+
+  // Small delay to prevent watchdog issues, though node.loop should be non-blocking
+  yield();
+}

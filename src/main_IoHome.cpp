@@ -1,67 +1,108 @@
-/**
- * @file main.cpp "main.cpp"
- * @brief iown-homecontrol
- * @author Velocet
- *
- * io-homecontrol (Somfy, Velux, etc.) Implementation for LoRa32 boards
- *
- * MIT License
- * Copyright (c) Velocet
- */
-
 #include <Arduino.h>
 #include <SPI.h>
-#include <LoRa32.h>
 #include <RadioLib.h>
 #include "IoHome.h"
 
-// RadioLib: Load RadioLib module with help of the LoRa32 definitions
-LORA32_RADIO radio = new Module(LORA32_SPI_CS, LORA32_RADIO_IO0, LORA32_RADIO_RST, LORA32_RADIO_IO1);
+// 1. Radio Setup for Heltec V3 (SX1262)
+// This creates the hardware driver for the SX1262 chip on your Heltec V3.2
+// Pins: NSS=8, DIO1=14, NRST=12, BUSY=13
+SX1262 radio = new Module(8, 14, 12, 13);
 
-// RadioLib: Get common layer pointer "phy"
+// This creates a generic pointer so our IoHome library doesn't need
+// to know exactly which chip (SX1262 or SX1276) we are using.
 PhysicalLayer* phy = (PhysicalLayer*)&radio;
 
-// --- MANDATORY LINKER FIXES FOR MAC/X86_64 ---
-// These satisfy the PhysicalLayer base class requirements
-int16_t PhysicalLayer::transmit(const uint8_t* data, size_t len, uint8_t addr) { return 0; }
-int16_t PhysicalLayer::setSyncWord(uint8_t* sync, size_t len) { return 0; }
-// Ensure the destructor is defined
-PhysicalLayer::~PhysicalLayer() {}
-// ---------------------------------------------
+// 2. IoHome Setup
+IoHomeChannel_t currentChannel = { 868, 95 };
+IoHomeNode node(phy, &currentChannel);
 
-// function declarations
-// ...
-void dummyISR() {} // TODO configure interrupt actions
+// Keys (Replace with your real keys if you have them, otherwise use zeros for sniffing)
+uint8_t stack_key[16] = {0};
+uint8_t system_key[16] = {0};
+NodeId myId = {0x01, 0x02, 0x03};
+NodeId targetId = {0x00, 0x00, 0x00};
 
-void setup() { // setup code to run once
+void setup() {
   Serial.begin(115200);
 
-  int state = 0;
+  // 1. Power on Heltec Vext
+  pinMode(18, OUTPUT);
+  digitalWrite(18, LOW);
+  delay(1000);
+  Serial.println(F("--- iHC Sniffer (Heltec V3.2) Starting ---"));
 
-  state = radio.begin();
-  if(state) {Serial.print(F("[RADIO] Init: "));Serial.println(state);while(true);}
+  // 2. Start SX1262 Chip
+  int state = radio.begin();
+  if(state != RADIOLIB_ERR_NONE) {
+    Serial.print(F("[RADIO] Hardware Init Failed: ")); Serial.println(state);
+    while(true);
+  }
 
-  // access common configuration layer through the "phy" pointer
-  state = phy->setFrequency(868.95);
-  if(state) {Serial.print(F("[PHY] Frequency: "));Serial.println(state);while(true);}
+  // 3. Configure Power Regulator for Heltec V3
+  state = radio.setRegulatorLDO();
+  if (state != RADIOLIB_ERR_NONE) {
+    Serial.print(F("[RADIO] LDO Config Failed: ")); Serial.println(state);
+  }
 
-  // interrupt-driven Rx/Tx
-  // phy->setPacketReceivedAction(dummyISR);
-  // phy->setPacketSentAction(dummyISR);
-  // phy->clearPacketReceivedAction(); // clear interrupt actions
-  // phy->clearPacketSentAction();     // clear interrupt actions
+  // 4. Initialize IoHome Protocol Logic (Now with state check!)
+  state = node.begin(&currentChannel, myId, targetId, stack_key, system_key);
+  if (state != RADIOLIB_ERR_NONE) {
+    Serial.print(F("[PROTO] Protocol Init Failed: ")); Serial.println(state);
+    while(true);
+  }
 
-  // Common SNR/RSSI measurement functions and also a "true" random number generator
-  Serial.print(F("[PHY] SNR     (dBm): "));Serial.println(phy->getSNR());
-  Serial.print(F("[PHY] RSSI    (dBm): "));Serial.println(phy->getRSSI());
-  Serial.print(F("[PHY] RNG (0 - 100): "));Serial.println(phy->random(100));
+  // 5. Enter RX Mode
+  state = radio.startReceive();
+  if (state != RADIOLIB_ERR_NONE) {
+    Serial.print(F("[RADIO] Start RX Failed: ")); Serial.println(state);
+    while(true);
+  }
 
-  state = phy->standby(); // change mode to standby ...
-  if(state) {Serial.print(F("[PHY] Standby: "));Serial.println(state);while(true);}
-
+  Serial.println(F("[SYSTEM] Online. Sniffing 868.95 MHz..."));
 }
 
-void loop() {Serial.println("l00p");} // code to run repeatedly
+unsigned long lastHop = 0;
+int currentFreqIdx = 0;
+float channels[] = {868.25, 868.95, 869.85};
 
-// function definitions
-// ...
+void loop() {
+  IoHomeFrame_t rxFrame;
+
+  // 1. Check if the radio has caught anything on the CURRENT frequency
+  if (node.loop(rxFrame)) {
+      // SUCCESS! We caught a packet.
+      // Print the info you already had:
+      Serial.print(F("\n[RECV] Caught on ")); Serial.print(channels[currentFreqIdx]); Serial.println(" MHz");
+      Serial.print(F("  -> Cmd: 0x")); Serial.print(rxFrame.commandId, HEX);
+      Serial.print(F(" From: "));
+      Serial.printf("%02X%02X%02X\n", rxFrame.sourceMac.n0, rxFrame.sourceMac.n1, rxFrame.sourceMac.n2);
+
+      if (!rxFrame.isValid) {
+          Serial.println(F("  -> Security check failed (This is normal if you don't have the Stack Key)"));
+      } else {
+          Serial.println(F("  -> Security Verified! Message is authentic."));
+      }
+
+      // Optional: don't hop immediately after a success, stay here for a second
+      lastHop = millis() + 1000;
+  }
+
+  // 2. Frequency Hopping Logic
+  // If we haven't seen anything for 400ms, switch to the next standard iHC channel
+  if (millis() - lastHop > 400) {
+    currentFreqIdx = (currentFreqIdx + 1) % 3;
+
+    // Tell the radio to move
+    phy->setFrequency(channels[currentFreqIdx]);
+
+    // IMPORTANT: On SX1262 (Heltec V3), we must re-enter RX mode after a frequency change
+    phy->startReceive();
+
+    lastHop = millis();
+
+    // Helpful for debugging setup: uncomment this if you aren't sure it's hopping
+    // Serial.printf("Scanning %.2f...\n", channels[currentFreqIdx]);
+  }
+
+  yield(); // Keep the ESP32 background tasks (WiFi/Watchdog) happy
+}

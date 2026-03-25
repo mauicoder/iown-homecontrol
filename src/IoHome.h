@@ -105,7 +105,7 @@ class IoHomeNode {
   public:
     IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel);
 
-    void begin(const IoHomeChannel_t* channel,
+    int16_t begin(const IoHomeChannel_t* channel,
                NodeId source_node_id,
                NodeId destination_node_id,
                uint8_t* stack_key,
