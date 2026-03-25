@@ -430,3 +430,21 @@ int16_t IoHomeNode::sendWink(NodeId targetMac) {
     // Send it over the radio
     return this->transmitFrame(frame);
 }
+
+bool IoHomeNode::loop(IoHomeFrame_t& rxFrame) {
+    // 1. Check if the radio has received a packet
+    // This calls your existing receiveFrame logic
+    int16_t state = this->receiveFrame(rxFrame);
+
+    if (state == RADIOLIB_ERR_NONE && rxFrame.isValid) {
+        // We found a valid, cryptographically signed frame!
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+        Serial.printf("[Listener] Captured Cmd: 0x%02X from %02X%02X%02X\n",
+                      rxFrame.commandId,
+                      rxFrame.sourceMac.n0, rxFrame.sourceMac.n1, rxFrame.sourceMac.n2);
+#endif
+        return true;
+    }
+
+    return false;
+}

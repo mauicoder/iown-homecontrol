@@ -111,6 +111,9 @@ class IoHomeNode {
                uint8_t* stack_key,
                uint8_t* system_key);
 
+    // Returns true if a valid frame was captured and parsed
+    bool loop(IoHomeFrame_t& rxFrame);
+
     int16_t setPhyProperties();
     int16_t transmitFrame(const std::vector<uint8_t>& frame);
     int16_t receiveFrame(IoHomeFrame_t& receivedFrame);
