@@ -1,6 +1,7 @@
 #include "IoHome.h"
 #include <RadioLib.h>
 #include <mbedtls/aes.h>
+#include <stdexcept>
 #include "TypeDef.h"
 #include "protocols/PhysicalLayer/PhysicalLayer.h"
 #include "debug_iohome.h" // For conditional Serial.printf
@@ -24,7 +25,7 @@ int16_t IoHomeNode::begin(const IoHomeChannel_t* channel,
                          NodeId destination_node_id,
                          uint8_t* stack_key,
                          uint8_t* system_key) {
-    // 1. Core Data Setup
+    // 1. Core Data Setup (Keep this - it's protocol logic)
     this->_channel = channel;
     this->_source_node_id = source_node_id;
     this->_destination_node_id = destination_node_id;
@@ -38,75 +39,17 @@ int16_t IoHomeNode::begin(const IoHomeChannel_t* channel,
 
     this->_sequence_counter = 0;
 
-    // 2. Physical Layer Configuration
+    // 2. Hardware Safety Check
     if (this->_phyLayer == nullptr || this->_channel == nullptr) {
-        return RADIOLIB_ERR_CHIP_NOT_FOUND; // Or a custom "Not Initialized" error
+        return RADIOLIB_ERR_CHIP_NOT_FOUND;
     }
 
-    int16_t state = RADIOLIB_ERR_NONE;
+    // --- STRIPPED HARDWARE CALLS ---
+    // We NO LONGER call setFrequency, setBitRate, or setSyncWord here.
+    // We assume the HAL (main.cpp) has already prepared the radio.
 
-    // Convert {868, 95} -> 868.95
-    float freq_mhz = (float)this->_channel->c0 + ((float)this->_channel->c1 / 100.0f);
-
-    // Set Frequency
-    state = this->_phyLayer->setFrequency(freq_mhz);
-    if (state != RADIOLIB_ERR_NONE) return state;
-
-    // Set Bit Rate (io-homecontrol uses 38.4 kbps)
-    state = this->_phyLayer->setBitRate(38.4);
-    if (state != RADIOLIB_ERR_NONE) return state;
-
-    // Set Frequency Deviation (19.2 kHz)
-    state = this->_phyLayer->setFrequencyDeviation(19.2);
-    if (state != RADIOLIB_ERR_NONE) return state;
-
-    // Set Sync Word (0x55 0x55 is the standard preamble/sync for iohc)
-    uint8_t syncWord[] = {0x55, 0x55};
-    state = this->_phyLayer->setSyncWord(syncWord, 2);
-    if (state != RADIOLIB_ERR_NONE) return state;
-
-    // Optional: Set Rx Bandwidth if supported by the chip
-    // state = this->_phyLayer->setRxBandwidth(156.2);
-
-    return RADIOLIB_ERR_NONE; // Everything initialized perfectly
+    return RADIOLIB_ERR_NONE;
 }
-
-int16_t IoHomeNode::setPhyProperties() {
-
-  int16_t state = 0; // RadioLib State
-  int8_t  pwr   = 0; // RadioLib Tx Output Power in dBm
-
-  pwr = 20;
-  state = RADIOLIB_ERR_INVALID_OUTPUT_POWER;
-
-  // RadioLib: Set Tx output power. Go from highest power and lower until we hit one supported by the module
-  while(state == RADIOLIB_ERR_INVALID_OUTPUT_POWER) {state = this->_phyLayer->setOutputPower(pwr--);}
-  RADIOLIB_ASSERT(state);
-
-  DataRate_t io_home_fskrate;
-  io_home_fskrate.fsk.bitRate = 38400;
-  io_home_fskrate.fsk.freqDev = 19200;
-
-  state = this->_phyLayer->setDataRate(io_home_fskrate);
-  RADIOLIB_ASSERT(state);
-  state = this->_phyLayer->setDataShaping(RADIOLIB_SHAPING_NONE);
-  RADIOLIB_ASSERT(state);
-  state = this->_phyLayer->setEncoding(RADIOLIB_ENCODING_NRZ);
-  RADIOLIB_ASSERT(state);
-
-  uint8_t sync_word[IOHOME_SYNC_WORD_LEN] = { 0 };
-  size_t pre_len = IOHOME_PREAMBLE_LEN / 8;
-  sync_word[0] = (uint8_t)(IOHOME_SYNC_WORD >> 16);
-  sync_word[1] = (uint8_t)(IOHOME_SYNC_WORD >> 8);
-  sync_word[2] = (uint8_t) IOHOME_SYNC_WORD;
-
-  state = this->_phyLayer->setSyncWord(sync_word, IOHOME_SYNC_WORD_LEN);
-  RADIOLIB_ASSERT(state);
-
-  state = this->_phyLayer->setPreambleLength(pre_len);
-  RADIOLIB_ASSERT(state);
-  return(state);
-} // set the physical layer configuration
 
 uint16_t IoHomeNode::crc16(const uint8_t* data, size_t length) {
   // CRC-16/CCITT (KERMIT) - Polynomial: 0x8408 (0x1021 bit-reversed), Init: 0x0000
@@ -122,6 +65,45 @@ uint16_t IoHomeNode::crc16(const uint8_t* data, size_t length) {
     }
   }
   return crc;
+}
+
+// Helper function to reverse the bit order of a byte.
+// This is necessary to match the on-air LSB-first transmission format.
+static uint8_t reverse_bits(uint8_t b) {
+   b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
+   b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
+   b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
+   return b;
+}
+
+void IoHomeNode::deWhiten(uint8_t* data, size_t length) {
+    // This is a software implementation of the standard PN9 de-whitening process.
+    // The transmitter must be using this algorithm for our SX1262 to be compatible.
+    // The key is that the protocol documentation states "bits of each byte are swapped".
+
+    uint16_t lfsr = 0x01FF; // Standard PN9 initial state
+
+    for (size_t i = 0; i < length; i++) {
+        // 1. Reverse the bits of the received byte to match the on-air LSB-first sequence.
+        uint8_t reversed_whitened_byte = reverse_bits(data[i]);
+
+        uint8_t dewhitened_byte = 0;
+        for (int j = 0; j < 8; j++) {
+            // 2. Generate the next bit of the PN9 whitening sequence.
+            uint8_t lfsr_out = (lfsr >> 8) & 0x01;
+
+            // 3. XOR the bit from the reversed byte (processing MSB to LSB, which is on-air LSB to MSB)
+            uint8_t in_bit = (reversed_whitened_byte >> (7 - j)) & 0x01;
+            dewhitened_byte |= ((in_bit ^ lfsr_out) << (7 - j));
+
+            // 4. Update the LFSR state using the standard PN9 polynomial (x^9 + x^5 + 1).
+            // The new bit is an XOR of the 9th and 5th bits (indexed 8 and 4).
+            uint16_t new_bit = ((lfsr >> 8) ^ (lfsr >> 4)) & 0x01;
+            lfsr = ((lfsr << 1) | new_bit) & 0x1FF;
+        }
+        // 5. Reverse the de-whitened byte back to the standard in-memory order.
+        data[i] = reverse_bits(dewhitened_byte);
+    }
 }
 
 bool IoHomeNode::validateFrameCrc(const uint8_t* frame, size_t frameLength) {
@@ -232,7 +214,6 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   // Note: Check if your hton is Big Endian; if so, CRC (LE) needs manual swap
   frame[offset++] = (uint8_t)(calculatedCrc & 0xFF);
   frame[offset++] = (uint8_t)((calculatedCrc >> 8) & 0xFF);
-
   // Increment internal state
   this->_sequence_counter++;
 
@@ -245,16 +226,25 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     parsedFrame.payload.clear();
 
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::parseFrame] Attempting to parse frame of length: %u\n", (unsigned int)frameLength);
+    Serial.printf("[IoHomeNode::parseFrame] --- Starting parse for frame of length: %u ---\n", (unsigned int)frameLength);
+    // Log raw bytes for debugging
+    Serial.print("[IoHomeNode::parseFrame] Raw bytes: ");
+    for(size_t i=0; i<frameLength; i++) {
+        Serial.printf("%02X ", frame[i]);
+    }
+    Serial.println();
 #endif
 
-    // 1. Basic structural length check
-    if (frameLength < 19) {
+    // 1. Basic structural length check (Header + CmdID + Counter + CRC)
+    if (frameLength < (IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + IOHOME_SECURITY_COUNTER_LEN + IOHOME_FRAME_CRC_LEN)) {
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+        Serial.printf("[IoHomeNode::parseFrame] Frame too short (len %u) for minimum header+cmd+counter+crc (%u bytes).\n", frameLength, (IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + IOHOME_SECURITY_COUNTER_LEN + IOHOME_FRAME_CRC_LEN));
+#endif
         return false;
     }
 
     // 2. Validate CRC
-    if (!IoHomeNode::validateFrameCrc(frame, frameLength)) {
+    if (!validateFrameCrc(frame, frameLength)) {
         return false;
     }
 
@@ -274,58 +264,113 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     // 4. Extract Command ID
     parsedFrame.commandId = frame[offset++];
 
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+    Serial.printf("[IoHomeNode::parseFrame] Decoded Header: Ctrl0=0x%02X (Binary: %s), Ctrl1=0x%02X (Binary: %s)\n",
+                  parsedFrame.ctrlByte0, String(parsedFrame.ctrlByte0, BIN).c_str(),
+                  parsedFrame.ctrlByte1, String(parsedFrame.ctrlByte1, BIN).c_str());
+    Serial.printf("[IoHomeNode::parseFrame] Source MAC: %02X%02X%02X, Dest MAC: %02X%02X%02X\n",
+                  parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
+                  parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+    Serial.printf("[IoHomeNode::parseFrame] Command ID: 0x%02X\n", parsedFrame.commandId);
+#endif
+
     // 5. Length Validation from CTRL0
-    size_t declared_msg_body_len = IOHOME_MSG_LEN(frame);
-    if (declared_msg_body_len != (frameLength - IOHOME_FRAME_CRC_LEN)) {
+    // The lower 5 bits of Ctrl0 represent the length of the payload (excluding Ctrl0 itself, Command ID, and Security Footer)
+    size_t declared_payload_len_from_ctrl0_field = (parsedFrame.ctrlByte0 & 0x1F);
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+    Serial.printf("[IoHomeNode::parseFrame] Declared payload length from Ctrl0 (lower 5 bits): %u bytes\n", declared_payload_len_from_ctrl0_field);
+#endif
+
+    // Determine actual security footer length based on observed frame length and declared payload length
+    // A more robust solution would involve flags in Ctrl0/Ctrl1 or a lookup table based on Command ID.
+    size_t actual_security_mac_len = IOHOME_SECURITY_MAC_LEN; // Default to 6
+    if (frameLength == 15 && declared_payload_len_from_ctrl0_field == 0) {
+        actual_security_mac_len = 2; // For 15-byte frames with 0 payload, MAC seems to be 2 bytes
+    }
+    size_t actual_security_footer_len = IOHOME_SECURITY_COUNTER_LEN + actual_security_mac_len;
+
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+    Serial.printf("[IoHomeNode::parseFrame] Assuming security footer length: %u (Counter: %u, MAC: %u)\n",
+                  (unsigned int)actual_security_footer_len, (unsigned int)IOHOME_SECURITY_COUNTER_LEN, (unsigned int)actual_security_mac_len);
+#endif
+
+    size_t expected_total_message_body_len = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + declared_payload_len_from_ctrl0_field + actual_security_footer_len;
+    size_t actual_total_message_body_len = frameLength - IOHOME_FRAME_CRC_LEN;
+
+    if (expected_total_message_body_len != actual_total_message_body_len) {
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+        Serial.printf("[IoHomeNode::parseFrame] ERROR: Message body length mismatch. Expected %u, but got %u (frameLength %u - CRC %u)\n",
+                      expected_total_message_body_len, actual_total_message_body_len, frameLength, IOHOME_FRAME_CRC_LEN);
+#endif
         return false;
     }
 
-    // 6. Calculate Payload Length (Layer 3)
-    const size_t security_footer_len = 8;
-    const size_t fixed_overhead = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + security_footer_len;
+    // 6. Extract Payload
+    size_t current_payload_start_offset = offset;
+    size_t current_payload_end_offset = frameLength - IOHOME_FRAME_CRC_LEN - actual_security_footer_len;
+    size_t actual_payload_len = current_payload_end_offset - current_payload_start_offset;
 
-    size_t expected_payload_len = 0;
-    if (declared_msg_body_len >= fixed_overhead) {
-        expected_payload_len = declared_msg_body_len - fixed_overhead;
-    } else {
+    if (actual_payload_len != declared_payload_len_from_ctrl0_field) {
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+        Serial.printf("[IoHomeNode::parseFrame] ERROR: Payload length inconsistency. Declared in Ctrl0: %u, but parsed: %u\n",
+                      declared_payload_len_from_ctrl0_field, actual_payload_len);
+#endif
         return false;
     }
 
-    // 7. Extract Payload
-    if (expected_payload_len > 0) {
-        parsedFrame.payload.resize(expected_payload_len);
-        std::copy(frame + offset, frame + offset + expected_payload_len, parsedFrame.payload.begin());
-        offset += expected_payload_len;
+    if (actual_payload_len > 0) {
+        parsedFrame.payload.resize(actual_payload_len);
+        std::copy(frame + offset, frame + offset + actual_payload_len, parsedFrame.payload.begin());
+        offset += actual_payload_len;
     }
 
-    // 8. Extract & Verify Security Footer (Counter + MAC)
-    // Offset is now correctly pointing to the 2-byte counter
+    // 7. Extract & Verify Security Footer (Counter + MAC)
+    // Offset is now correctly pointing to the start of the security footer
     uint16_t rxCounter = (frame[offset] << 8) | frame[offset + 1];
     offset += 2;
 
-    uint8_t rxMac[6];
-    std::copy(frame + offset, frame + offset + 6, rxMac);
+    uint8_t rxMac[IOHOME_SECURITY_MAC_LEN] = {0}; // Use max possible MAC length for buffer
+    // Copy only the actual MAC bytes based on actual_security_mac_len
+    if (actual_security_mac_len > 0) {
+        std::copy(frame + offset, frame + offset + actual_security_mac_len, rxMac);
+    }
     // Note: No need to increment offset further, we are at the CRC which was already checked.
+
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+    Serial.printf("[IoHomeNode::parseFrame] Extracted Security Footer: Counter=0x%04X, MAC (first %u bytes): ", rxCounter, (unsigned int)actual_security_mac_len);
+    for(size_t i=0; i<actual_security_mac_len; i++) {
+        Serial.printf("%02X ", rxMac[i]);
+    }
+    Serial.println();
+#endif
 
     // --- CRYPTOGRAPHIC VERIFICATION ---
     mbedtls_aes_context aes;
     mbedtls_aes_init(&aes);
-    mbedtls_aes_setkey_enc(&aes, this->_stack_key, 128);
 
     uint8_t input_block[16] = {0};
-    // Re-verify the first 8 bytes (Header), Command, and Counter
+    // The input block for AES is always 16 bytes.
+    // It's derived from the first 8 bytes of the frame (Ctrl0, Ctrl1, SrcMAC, DestMAC),
+    // followed by the Command ID, the 2-byte rolling counter, and then padding to 16 bytes.
     for(int i = 0; i < 8; i++) { input_block[i] = frame[i]; }
     input_block[8] = parsedFrame.commandId;
     input_block[9] = (uint8_t)(rxCounter >> 8);
     input_block[10] = (uint8_t)(rxCounter & 0xFF);
 
+    // Calculate the expected MAC based on the full 6-byte MAC length for comparison.
+    // If the actual frame has a shorter MAC, we will compare only the available bytes.
     uint8_t expected_block[16] = {0};
+    mbedtls_aes_setkey_enc(&aes, this->_stack_key, 128);
     mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, input_block, expected_block);
 
     bool macMatch = true;
-    for (int i = 0; i < 6; i++) {
+    // Compare only the number of MAC bytes we actually received
+    for (size_t i = 0; i < actual_security_mac_len; i++) {
         if (rxMac[i] != expected_block[i]) {
             macMatch = false;
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+            Serial.printf("[IoHomeNode::parseFrame] ERROR: MAC mismatch at byte %u: Received 0x%02X, Expected 0x%02X\n", i, rxMac[i], expected_block[i]);
+#endif
             break;
         }
     }
@@ -343,13 +388,13 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
 
 int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
 
-    float freq = this->_channel->c0 + (this->_channel->c1 / 100.0);
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::transmitFrame] Setting frequency to %.2f MHz (Channel C0:%u, C1:%u)\n", freq, this->_channel->c0, this->_channel->c1);
-#endif
-    // Set frequency according to the current channel
-    int16_t state = this->_phyLayer->setFrequency(freq);
-    RADIOLIB_ASSERT(state);
+    // float freq = this->_channel->c0 + (this->_channel->c1 / 100.0);
+    // #if defined(ARDUINO) && defined(DEBUG_IOHOME)
+    // Serial.printf("[IoHomeNode::transmitFrame] Setting frequency to %.2f MHz (Channel C0:%u, C1:%u)\n", freq, this->_channel->c0, this->_channel->c1);
+    // #endif
+    // // Set frequency according to the current channel
+    // int16_t state = this->_phyLayer->setFrequency(freq);
+    // RADIOLIB_ASSERT(state);
 
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
     Serial.printf("[IoHomeNode::transmitFrame] Attempting to transmit frame (len %u): ", frame.size());
@@ -359,7 +404,7 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
     Serial.println(""); // Use empty string for new line
 #endif
     // Transmit the frame
-    state = this->_phyLayer->startTransmit(frame.data(), frame.size());
+    int16_t state = this->_phyLayer->startTransmit(const_cast<uint8_t*>(frame.data()), frame.size());
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
     if (state == RADIOLIB_ERR_NONE) {
         Serial.println("[IoHomeNode::transmitFrame] Transmission initiated successfully.");
@@ -371,35 +416,67 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
 }
 
 int16_t IoHomeNode::receiveFrame(IoHomeFrame_t& receivedFrame) {
-    // 1. Check if we are already in RX mode. If not, start it.
-    // (Note: In a real app, you'd track state, but for a simple sniffer:)
-
-    // 2. Check if a packet has actually arrived
+    // 1. Check for incoming data
     size_t packetLength = this->_phyLayer->getPacketLength();
 
     if (packetLength == 0) {
-        // No packet yet. This is normal!
-        // We return a specific code so the caller knows to try again later.
         return RADIOLIB_ERR_RX_TIMEOUT;
     }
 
-    // 3. We have data! Now we read it.
+    // Ghost Packet Detection:
+    // The PhysicalLayer abstraction doesn't expose getRSSI(false), so we must
+    // downcast to the specific SX126x implementation to access it.
+    // NOTE: We use static_cast because RTTI (and thus dynamic_cast) is disabled
+    // in the Arduino environment for performance reasons. This is safe as long
+    // as we guarantee that the PhysicalLayer object passed to the IoHomeNode
+    // constructor is an instance of SX126x or one of its derived classes.
+    SX126x* sx126x_radio = static_cast<SX126x*>(this->_phyLayer);
+    if (sx126x_radio) {
+        float instantaneousRssi = sx126x_radio->getRSSI(false); // 'false' for instantaneous
+        if (instantaneousRssi < -100.0) {
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+            Serial.printf("[IoHomeNode::receiveFrame] Discarding ghost packet (RSSI: %.2f dBm, Len: %u)\n", instantaneousRssi, packetLength);
+#endif
+            // Forcefully reset the radio's state to clear the FIFO and any stuck IRQ flags.
+            // This is more robust than just calling startReceive().
+            this->_phyLayer->standby();
+            this->_phyLayer->startReceive();
+            return RADIOLIB_ERR_RX_TIMEOUT;
+        }
+    }
+
+    // 2. Read the data
     std::vector<uint8_t> rxBuffer(packetLength);
-    int16_t state = this->_phyLayer->readData(rxBuffer.data(), packetLength);
+    int16_t readState = this->_phyLayer->readData(rxBuffer.data(), packetLength);
+    if (readState != RADIOLIB_ERR_NONE) {
+        // If read fails, something is very wrong. Reset and get out.
+        this->_phyLayer->standby();
+        this->_phyLayer->startReceive();
+        return readState;
+    }
 
-    if (state != RADIOLIB_ERR_NONE) return state;
+    // De-whiten the received data in software.
+    // This is necessary because the transmitter's whitening algorithm is likely
+    // incompatible with the SX126x's hardware implementation.
+    IoHomeNode::deWhiten(rxBuffer.data(), rxBuffer.size());
 
-    // 4. Parse the bytes we just pulled from the hardware
-    // Note: Use 'this->parseFrame' instead of 'IoHomeNode::parseFrame'
-    // to ensure we use the instance's _stack_key
+    // 5. Now, parse the buffer we just read.
     if (!this->parseFrame(rxBuffer.data(), rxBuffer.size(), receivedFrame)) {
+        // PARSE FAILED (bad CRC, etc.)
+        // This is a critical failure point. The radio might be in a weird state.
+        // Forcefully reset it to prevent subsequent noise from being detected as packets.
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+        Serial.println("[IoHomeNode::receiveFrame] Packet failed validation (CRC/Parse). Force-resetting radio state.");
+#endif
+        this->_phyLayer->standby();
+        this->_phyLayer->startReceive();
         return RADIOLIB_ERR_CRC_MISMATCH;
     }
 
-    // 5. IMPORTANT: Put the radio back into listen mode for the next packet
+    // 6. SUCCESS! The packet was valid.
+    // Now we can safely restart the receiver for the next packet.
     this->_phyLayer->startReceive();
-
-    return RADIOLIB_ERR_NONE;
+    return RADIOLIB_ERR_NONE; // Success!
 }
 
 int16_t IoHomeNode::sendWink(NodeId targetMac) {

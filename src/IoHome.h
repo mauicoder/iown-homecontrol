@@ -13,8 +13,11 @@
 #define IOHOME_PREAMBLE_LEN                 (512) // Preamble Length in Bits
 
 // sync word
-#define IOHOME_SYNC_WORD                    (0x57FD99)
-#define IOHOME_SYNC_WORD_LEN                (3)
+// This is the HARDWARE sync word for the SX126x to detect a packet.
+// It is NOT the same as the de-whitening key.
+#define IOHOME_HW_SYNC_WORD                 (0x7982)
+#define IOHOME_HW_SYNC_WORD_LEN             (2)
+#define IOHOME_WHITENING_KEY                (0x07FD99) // This is the de-whitening key
 
 // frame header
 #define IOHOME_CTRLBYTE0_MODE_TWOWAY        (0x00 << 7)        //  7     7
@@ -114,7 +117,6 @@ class IoHomeNode {
     // Returns true if a valid frame was captured and parsed
     bool loop(IoHomeFrame_t& rxFrame);
 
-    int16_t setPhyProperties();
     int16_t transmitFrame(const std::vector<uint8_t>& frame);
     int16_t receiveFrame(IoHomeFrame_t& receivedFrame);
 
@@ -128,6 +130,8 @@ class IoHomeNode {
     );
 
     bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
+
+    static void deWhiten(uint8_t* data, size_t length);
 
     // Commands
     int16_t sendWink(NodeId targetMac);
