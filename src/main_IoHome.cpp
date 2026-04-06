@@ -192,6 +192,68 @@ void loop() {
       }
       Serial.println();
 
+      // --- 1. EXTRACT 8-BIT DATA FROM 10-BIT UART FRAMES ---
+      uint8_t decodedFrame[256];
+      size_t decodedLen = 0;
+      uint16_t currentData = 0;
+      int frameBit = 0; // 0: wait for start, 1..8: data, 9: stop
+      int idleBits = 0;
+
+      for(int i = 0; i < len; i++) {
+        // The SX1262 packs bits MSB-first chronologically
+        for(int b = 7; b >= 0; b--) {
+          uint8_t bit = (byteArr[i] >> b) & 0x01;
+
+          if (frameBit == 0) {
+            if (bit == 0) {
+              // Found Start bit (0)
+              frameBit = 1;
+              currentData = 0;
+              idleBits = 0;
+            } else {
+              // Line is idle (1)
+              idleBits++;
+              // In 8-N-1 UART, >15 consecutive 1s guarantees the transmission is finished
+              if (idleBits > 15 && decodedLen > 0) {
+                goto decode_done;
+              }
+            }
+          } else if (frameBit >= 1 && frameBit <= 8) {
+            // Data bits (UART sends LSB first, so we shift into place)
+            currentData |= (bit << (frameBit - 1));
+            frameBit++;
+          } else if (frameBit == 9) {
+            // Stop bit (1)
+            decodedFrame[decodedLen++] = currentData;
+            frameBit = 0;
+          }
+        }
+      }
+      decode_done:
+
+      // --- 2. DE-WHITEN THE PAYLOAD ---
+      IoHomeNode::deWhiten(decodedFrame, decodedLen);
+
+      Serial.print(F("[IOHOME] De-whitened: "));
+      for(size_t i = 0; i < decodedLen; i++) {
+        if(decodedFrame[i] < 0x10) Serial.print(F("0"));
+        Serial.print(decodedFrame[i], HEX);
+        Serial.print(F(" "));
+      }
+      Serial.println();
+
+      // --- 3. ATTEMPT TO PARSE ---
+      IoHomeFrame_t parsedFrame;
+      if (ioNode.parseFrame(decodedFrame, decodedLen, parsedFrame)) {
+          Serial.println(F(">>> SUCCESSFULLY PARSED IOHOME FRAME <<<"));
+          Serial.printf("Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X\n",
+                parsedFrame.commandId,
+                parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
+                parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+      } else {
+          Serial.println(F(">>> PARSE FAILED (Expected until AES keys are provided) <<<"));
+      }
+
     } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
       // Packet was received, but is malformed
       Serial.println(F("[RAW] CRC error!"));
