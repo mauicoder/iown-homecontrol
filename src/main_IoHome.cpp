@@ -31,12 +31,12 @@ void setFlag(void) {
   receivedFlag = true;
 }
 // --- GLOBAL STATE ---
-float targetFreq = 868.95;
+float targetFreq = IOHOME_FREQ;
 uint32_t lastRssiUpdate = 0;
 
 // --- IOHOME LIBRARY OBJECTS ---
-// Define the channel based on targetFreq (868.95 MHz -> c0=868, c1=95)
-IoHomeChannel_t ioHomeChannel = { .c0 = 868, .c1 = 95 };
+// Define the channel based on targetFreq
+IoHomeChannel_t ioHomeChannel = { .c0 = IOHOME_CHAN_C0, .c1 = IOHOME_CHAN_C1 };
 // Placeholder NodeIDs and keys - replace with your actual values
 NodeId sourceNodeId = {0x00, 0x00, 0x00};
 NodeId destNodeId = {0x00, 0x00, 0x00};
@@ -73,9 +73,9 @@ void setup() {
 
   // 4. RADIOLIB STARTUP
   Serial.print(F("Initializing Radio... "));
-  // FSK Params: Freq, Bitrate (38.4), Dev (19.2), RX BW (156.2)
+  // FSK Params: Freq, Bitrate, Dev, RX BW
 
-  int state = radio.beginFSK(targetFreq, 38.4, 19.2, 156.2);
+  int state = radio.beginFSK(targetFreq, IOHOME_BITRATE, IOHOME_FREQ_DEV, IOHOME_RX_BW);
 
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println(F("SUCCESS"));
@@ -94,8 +94,7 @@ void setup() {
     }
     if (state == RADIOLIB_ERR_NONE) {
       // Must use Fixed length because the length byte is PN9 whitened!
-      // 64 bytes is enough to safely capture the entire io-homecontrol packet + some trailing noise
-      state = radio.fixedPacketLengthMode(64);
+      state = radio.fixedPacketLengthMode(IOHOME_FIXED_PAYLOAD_LEN);
     }
     if (state == RADIOLIB_ERR_NONE) {
       Serial.println(F("SUCCESS"));
@@ -105,12 +104,10 @@ void setup() {
 
     // Set the actual sync word bytes
     Serial.print(F("Setting sync word... "));
-    // io-homecontrol original hardware uses Direct Mode (bypassing the hardware Sync Word entirely).
-    // The true physical Sync Word is the UART-encoded bits of "FF 33", which precisely evaluate to 0x57FD99!
-    uint8_t syncWord[] = { 0x57, 0xFD, 0x99 };
-    state = radio.setSyncWord(syncWord, 3);
+    uint8_t syncWord[] = { (uint8_t)(IOHOME_HW_SYNC_WORD >> 16), (uint8_t)(IOHOME_HW_SYNC_WORD >> 8), (uint8_t)IOHOME_HW_SYNC_WORD };
+    state = radio.setSyncWord(syncWord, IOHOME_HW_SYNC_WORD_LEN);
     if (state == RADIOLIB_ERR_NONE) {
-      Serial.println(F("SUCCESS (0x57FD99)"));
+      Serial.printf("SUCCESS (0x%06X)\n", IOHOME_HW_SYNC_WORD);
     } else {
       Serial.printf("FAILED, code %d\n", state); // This is a critical failure
     }
@@ -169,9 +166,8 @@ void loop() {
     receivedFlag = false;
 
     // A packet was received, read it
-    // Allocate 256 bytes to safely handle the maximum possible SX1262 FIFO size
     int len = radio.getPacketLength();
-    byte byteArr[256] = {0};
+    byte byteArr[IOHOME_MAX_FIFO_LEN] = {0};
     int state = radio.readData(byteArr, len);
 
     if (state == RADIOLIB_ERR_NONE) {
@@ -193,7 +189,7 @@ void loop() {
       Serial.println();
 
       // --- 1. EXTRACT 8-BIT DATA FROM 10-BIT UART FRAMES ---
-      uint8_t decodedFrame[256];
+      uint8_t decodedFrame[IOHOME_MAX_FIFO_LEN];
       size_t decodedLen = 0;
       uint16_t currentData = 0;
       int frameBit = 0; // 0: wait for start, 1..8: data, 9: stop
@@ -213,11 +209,10 @@ void loop() {
             } else {
               // Line is idle (1)
               idleBits++;
-              // In 8-N-1 UART, >15 consecutive 1s guarantees the transmission is finished
-              if (idleBits > 15 && decodedLen > 0) {
+              if (idleBits > IOHOME_UART_IDLE_BITS_MAX && decodedLen > 0) {
                 size_t expectedLen = (decodedFrame[0] & 0x1F) + 1 + 2;
-                // Valid io-homecontrol frames are >= 15 bytes. If it's shorter, it's garbage noise.
-                if (expectedLen >= 15 && decodedLen >= expectedLen) {
+                // Minimum valid frame size validation. If it's shorter, it's garbage noise.
+                if (expectedLen >= IOHOME_MIN_FRAME_LEN && decodedLen >= expectedLen) {
                   goto decode_done;
                 } else {
                   decodedLen = 0; // Reset and keep searching this buffer!
@@ -244,7 +239,7 @@ void loop() {
       // --- 1.5 TRUNCATE TRAILING NOISE/PADDING ---
       if (decodedLen > 0) {
         size_t expectedLen = (decodedFrame[0] & 0x1F) + 1 + 2; // FieldValue + 1 (Body) + 2 (CRC)
-        if (expectedLen >= 15 && expectedLen <= decodedLen) {
+        if (expectedLen >= IOHOME_MIN_FRAME_LEN && expectedLen <= decodedLen) {
           decodedLen = expectedLen;
         } else {
           decodedLen = 0; // Completely invalid length

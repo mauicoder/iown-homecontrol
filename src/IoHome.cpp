@@ -58,7 +58,7 @@ uint16_t IoHomeNode::crc16(const uint8_t* data, size_t length) {
     crc ^= data[i];
     for (uint8_t bit = 0; bit < 8; bit++) {
       if (crc & 0x0001) {
-        crc = (crc >> 1) ^ 0x8408;
+        crc = (crc >> 1) ^ IOHOME_CRC_POLY;
       } else {
         crc >>= 1;
       }
@@ -81,7 +81,7 @@ void IoHomeNode::deWhiten(uint8_t* data, size_t length) {
     // The transmitter must be using this algorithm for our SX1262 to be compatible.
     // The key is that the protocol documentation states "bits of each byte are swapped".
 
-    uint16_t lfsr = 0x01FF; // Standard PN9 initial state
+    uint16_t lfsr = IOHOME_PN9_LFSR_INIT; // Standard PN9 initial state
 
     for (size_t i = 0; i < length; i++) {
         // 1. Reverse the bits of the received byte to match the on-air LSB-first sequence.

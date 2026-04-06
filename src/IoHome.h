@@ -13,11 +13,23 @@
 #define IOHOME_PREAMBLE_LEN                 (512) // Preamble Length in Bits
 
 // sync word
-// This is the HARDWARE sync word for the SX126x to detect a packet.
-// It is NOT the same as the de-whitening key.
-#define IOHOME_HW_SYNC_WORD                 (0x7982)
-#define IOHOME_HW_SYNC_WORD_LEN             (2)
-#define IOHOME_WHITENING_KEY                (0x07FD99) // This is the de-whitening key
+// io-homecontrol original hardware uses Direct Mode (bypassing the hardware Sync Word entirely).
+// The true physical Sync Word is the UART-encoded bits of "FF 33", which precisely evaluate to 0x57FD99.
+#define IOHOME_HW_SYNC_WORD                 (0x57FD99)
+#define IOHOME_HW_SYNC_WORD_LEN             (3)
+
+// FSK Radio Parameters
+#define IOHOME_FREQ                         (868.95f)
+#define IOHOME_CHAN_C0                      (868)
+#define IOHOME_CHAN_C1                      (95)
+#define IOHOME_BITRATE                      (38.4f)
+#define IOHOME_FREQ_DEV                     (19.2f)
+#define IOHOME_RX_BW                        (156.2f)
+
+// Protocol Constants
+#define IOHOME_CRC_POLY                     (0x8408)
+#define IOHOME_PN9_LFSR_INIT                (0x01FF)
+#define IOHOME_MIN_FRAME_LEN                (15)
 
 // frame header
 #define IOHOME_CTRLBYTE0_MODE_TWOWAY        (0x00 << 7)        //  7     7
@@ -49,6 +61,11 @@
 #define IOHOME_SECURITY_COUNTER_LEN         (2)
 #define IOHOME_SECURITY_MAC_LEN             (6)
 #define IOHOME_SECURITY_FOOTER_LEN          (IOHOME_SECURITY_COUNTER_LEN + IOHOME_SECURITY_MAC_LEN) // 8 bytes
+
+// Buffer lengths
+#define IOHOME_FIXED_PAYLOAD_LEN            (64)
+#define IOHOME_MAX_FIFO_LEN                 (256)
+#define IOHOME_UART_IDLE_BITS_MAX           (15)
 
 #pragma endregion CONST
 
