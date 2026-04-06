@@ -231,10 +231,18 @@ void loop() {
       }
       decode_done:
 
-      // --- 2. DE-WHITEN THE PAYLOAD ---
-      IoHomeNode::deWhiten(decodedFrame, decodedLen);
+      // --- 1.5 TRUNCATE TRAILING NOISE/PADDING ---
+      if (decodedLen > 0) {
+        size_t expectedLen = (decodedFrame[0] & 0x1F) + 1 + 2; // FieldValue + 1 (Body) + 2 (CRC)
+        if (expectedLen <= decodedLen) {
+          decodedLen = expectedLen;
+        }
+      }
 
-      Serial.print(F("[IOHOME] De-whitened: "));
+      // --- 2. DE-WHITEN THE PAYLOAD ---
+      // 1-way remotes use Direct Mode (UART bit-banging) so the payload is NOT PN9 whitened over the air!
+
+      Serial.print(F("[IOHOME] Decoded: "));
       for(size_t i = 0; i < decodedLen; i++) {
         if(decodedFrame[i] < 0x10) Serial.print(F("0"));
         Serial.print(decodedFrame[i], HEX);

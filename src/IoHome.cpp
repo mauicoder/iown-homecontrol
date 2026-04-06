@@ -121,7 +121,8 @@ bool IoHomeNode::validateFrameCrc(const uint8_t* frame, size_t frameLength) {
   uint16_t calculatedCrc = IoHomeNode::crc16(frame, IOHOME_FRAME_CRC_POS(frameLength));
 
   // Extract the received CRC from the end of the frame
-  uint16_t receivedCrc = IoHomeNode::ntoh<uint16_t>((uint8_t*)frame + IOHOME_FRAME_CRC_POS(frameLength));
+  // io-homecontrol CRC is transmitted Little-Endian
+  uint16_t receivedCrc = frame[IOHOME_FRAME_CRC_POS(frameLength)] | (frame[IOHOME_FRAME_CRC_POS(frameLength) + 1] << 8);
 
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
   Serial.printf("[IoHomeNode::validateFrameCrc] Calculated CRC: 0x%04X, Received CRC: 0x%04X\n", calculatedCrc, receivedCrc);
@@ -275,18 +276,14 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
 #endif
 
     // 5. Length Validation from CTRL0
-    // The lower 5 bits of Ctrl0 represent the length of the payload (excluding Ctrl0 itself, Command ID, and Security Footer)
-    size_t declared_payload_len_from_ctrl0_field = (parsedFrame.ctrlByte0 & 0x1F);
+    // The lower 5 bits of Ctrl0 represent TotalBodyBytes - 1
+    size_t total_body_bytes = (parsedFrame.ctrlByte0 & 0x1F) + 1;
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::parseFrame] Declared payload length from Ctrl0 (lower 5 bits): %u bytes\n", declared_payload_len_from_ctrl0_field);
+    Serial.printf("[IoHomeNode::parseFrame] Declared total body length from Ctrl0: %u bytes\n", total_body_bytes);
 #endif
 
     // Determine actual security footer length based on observed frame length and declared payload length
-    // A more robust solution would involve flags in Ctrl0/Ctrl1 or a lookup table based on Command ID.
     size_t actual_security_mac_len = IOHOME_SECURITY_MAC_LEN; // Default to 6
-    if (frameLength == 15 && declared_payload_len_from_ctrl0_field == 0) {
-        actual_security_mac_len = 2; // For 15-byte frames with 0 payload, MAC seems to be 2 bytes
-    }
     size_t actual_security_footer_len = IOHOME_SECURITY_COUNTER_LEN + actual_security_mac_len;
 
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
@@ -294,7 +291,7 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
                   (unsigned int)actual_security_footer_len, (unsigned int)IOHOME_SECURITY_COUNTER_LEN, (unsigned int)actual_security_mac_len);
 #endif
 
-    size_t expected_total_message_body_len = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + declared_payload_len_from_ctrl0_field + actual_security_footer_len;
+    size_t expected_total_message_body_len = total_body_bytes;
     size_t actual_total_message_body_len = frameLength - IOHOME_FRAME_CRC_LEN;
 
     if (expected_total_message_body_len != actual_total_message_body_len) {
@@ -306,17 +303,11 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     }
 
     // 6. Extract Payload
-    size_t current_payload_start_offset = offset;
-    size_t current_payload_end_offset = frameLength - IOHOME_FRAME_CRC_LEN - actual_security_footer_len;
-    size_t actual_payload_len = current_payload_end_offset - current_payload_start_offset;
-
-    if (actual_payload_len != declared_payload_len_from_ctrl0_field) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.printf("[IoHomeNode::parseFrame] ERROR: Payload length inconsistency. Declared in Ctrl0: %u, but parsed: %u\n",
-                      declared_payload_len_from_ctrl0_field, actual_payload_len);
-#endif
-        return false;
+    size_t overhead = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + actual_security_footer_len;
+    if (actual_total_message_body_len < overhead) {
+        return false; // Malformed frame length
     }
+    size_t actual_payload_len = actual_total_message_body_len - overhead;
 
     if (actual_payload_len > 0) {
         parsedFrame.payload.resize(actual_payload_len);
