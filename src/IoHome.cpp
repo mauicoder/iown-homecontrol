@@ -4,7 +4,6 @@
 #include <stdexcept>
 #include "TypeDef.h"
 #include "protocols/PhysicalLayer/PhysicalLayer.h"
-#include "debug_iohome.h" // For conditional Serial.printf
 // Mock Serial object and PhysicalLayer base class definitions
 // were moved to tests/test_IoHome.cpp to ensure vtable is emitted in the correct compilation unit for the test build.
 
