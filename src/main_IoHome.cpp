@@ -215,7 +215,13 @@ void loop() {
               idleBits++;
               // In 8-N-1 UART, >15 consecutive 1s guarantees the transmission is finished
               if (idleBits > 15 && decodedLen > 0) {
-                goto decode_done;
+                size_t expectedLen = (decodedFrame[0] & 0x1F) + 1 + 2;
+                // Valid io-homecontrol frames are >= 15 bytes. If it's shorter, it's garbage noise.
+                if (expectedLen >= 15 && decodedLen >= expectedLen) {
+                  goto decode_done;
+                } else {
+                  decodedLen = 0; // Reset and keep searching this buffer!
+                }
               }
             }
           } else if (frameBit >= 1 && frameBit <= 8) {
@@ -223,8 +229,12 @@ void loop() {
             currentData |= (bit << (frameBit - 1));
             frameBit++;
           } else if (frameBit == 9) {
-            // Stop bit (1)
-            decodedFrame[decodedLen++] = currentData;
+            // Validate Stop bit (1) to prevent framing errors
+            if (bit == 1) {
+              decodedFrame[decodedLen++] = currentData;
+            } else {
+              decodedLen = 0; // Framing error, discard chunk
+            }
             frameBit = 0;
           }
         }
@@ -234,32 +244,38 @@ void loop() {
       // --- 1.5 TRUNCATE TRAILING NOISE/PADDING ---
       if (decodedLen > 0) {
         size_t expectedLen = (decodedFrame[0] & 0x1F) + 1 + 2; // FieldValue + 1 (Body) + 2 (CRC)
-        if (expectedLen <= decodedLen) {
+        if (expectedLen >= 15 && expectedLen <= decodedLen) {
           decodedLen = expectedLen;
+        } else {
+          decodedLen = 0; // Completely invalid length
         }
       }
 
       // --- 2. DE-WHITEN THE PAYLOAD ---
       // 1-way remotes use Direct Mode (UART bit-banging) so the payload is NOT PN9 whitened over the air!
 
-      Serial.print(F("[IOHOME] Decoded: "));
-      for(size_t i = 0; i < decodedLen; i++) {
-        if(decodedFrame[i] < 0x10) Serial.print(F("0"));
-        Serial.print(decodedFrame[i], HEX);
-        Serial.print(F(" "));
-      }
-      Serial.println();
+      if (decodedLen > 0) {
+        Serial.print(F("[IOHOME] Decoded: "));
+        for(size_t i = 0; i < decodedLen; i++) {
+          if(decodedFrame[i] < 0x10) Serial.print(F("0"));
+          Serial.print(decodedFrame[i], HEX);
+          Serial.print(F(" "));
+        }
+        Serial.println();
 
-      // --- 3. ATTEMPT TO PARSE ---
-      IoHomeFrame_t parsedFrame;
-      if (ioNode.parseFrame(decodedFrame, decodedLen, parsedFrame)) {
-          Serial.println(F(">>> SUCCESSFULLY PARSED IOHOME FRAME <<<"));
-          Serial.printf("Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X\n",
-                parsedFrame.commandId,
-                parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
-                parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+        // --- 3. ATTEMPT TO PARSE ---
+        IoHomeFrame_t parsedFrame;
+        if (ioNode.parseFrame(decodedFrame, decodedLen, parsedFrame)) {
+            Serial.println(F(">>> SUCCESSFULLY PARSED IOHOME FRAME <<<"));
+            Serial.printf("Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X\n",
+                  parsedFrame.commandId,
+                  parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
+                  parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+        } else {
+            Serial.println(F(">>> PARSE FAILED (Expected until AES keys are provided) <<<"));
+        }
       } else {
-          Serial.println(F(">>> PARSE FAILED (Expected until AES keys are provided) <<<"));
+        Serial.println(F("[RAW] Discarded noise/ghost packet during UART extraction."));
       }
 
     } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
