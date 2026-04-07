@@ -2,6 +2,8 @@
 #include <SPI.h>
 #include <RadioLib.h>
 #include "IoHome.h" // Include the IoHome library header
+#include <Wire.h>
+#include <U8g2lib.h>
 
 // --- HELTEC V3.2 PIN MAPPING ---
 #define HW_VEXT            36   // Power Rail (Active LOW)
@@ -13,6 +15,14 @@
 #define LORA_SCK           9
 #define LORA_MISO          11
 #define LORA_MOSI          10
+
+// --- OLED PIN MAPPING ---
+#define OLED_SDA           17
+#define OLED_SCL           18
+#define OLED_RST           21
+
+// --- OLED OBJECT ---
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, OLED_RST, OLED_SCL, OLED_SDA);
 
 // --- RADIO OBJECT ---
 SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_NRST, LORA_BUSY);
@@ -51,6 +61,14 @@ void setup() {
 
   pinMode(HW_LED, OUTPUT);
   digitalWrite(HW_LED, LOW);
+
+  // Initialize OLED (Needs HW_VEXT to be LOW first, which we just did!)
+  u8g2.begin();
+  u8g2.setFont(u8g2_font_ncenB08_tr);
+  u8g2.clearBuffer();
+  u8g2.drawStr(0, 15, "Heltec V3.2 IoHome");
+  u8g2.drawStr(0, 30, "Booting...");
+  u8g2.sendBuffer();
 
   // Initialize Serial and wait for connection
   Serial.begin(115200);
@@ -131,8 +149,18 @@ void setup() {
     } else {
         Serial.printf("FAILED (Error: %d)\n", state);
     }
+
+    // Display Ready State
+    u8g2.clearBuffer();
+    u8g2.drawStr(0, 15, "Heltec V3.2 IoHome");
+    u8g2.drawStr(0, 30, "Radio: LISTENING");
+    u8g2.sendBuffer();
+
   } else {
     Serial.printf("FAILED (Error: %d)\n", state);
+    u8g2.clearBuffer();
+    u8g2.drawStr(0, 15, "RADIO INIT FAILED!");
+    u8g2.sendBuffer();
     while(1);
   }
 }
@@ -266,6 +294,17 @@ void loop() {
                   parsedFrame.commandId,
                   parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
                   parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+
+            // Update OLED Display
+            u8g2.clearBuffer();
+            char buf[32];
+            sprintf(buf, "Cmd: 0x%02X", parsedFrame.commandId);
+            u8g2.drawStr(0, 15, buf);
+            sprintf(buf, "Src: %02X%02X%02X", parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2);
+            u8g2.drawStr(0, 35, buf);
+            sprintf(buf, "Dst: %02X%02X%02X", parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+            u8g2.drawStr(0, 55, buf);
+            u8g2.sendBuffer();
         } else {
             Serial.println(F(">>> PARSE FAILED (Expected until AES keys are provided) <<<"));
         }
