@@ -44,6 +44,11 @@ void setFlag(void) {
 float targetFreq = IOHOME_FREQ;
 uint32_t lastRssiUpdate = 0;
 
+// --- PACKET HISTORY ---
+#define HISTORY_SIZE 3
+char packetHistory[HISTORY_SIZE][32];
+uint8_t historyCount = 0;
+
 // --- IOHOME LIBRARY OBJECTS ---
 // Define the channel based on targetFreq
 IoHomeChannel_t ioHomeChannel = { .c0 = IOHOME_CHAN_C0, .c1 = IOHOME_CHAN_C1 };
@@ -288,25 +293,42 @@ void loop() {
 
         // --- 3. ATTEMPT TO PARSE ---
         IoHomeFrame_t parsedFrame;
-        if (ioNode.parseFrame(decodedFrame, decodedLen, parsedFrame)) {
-            Serial.println(F(">>> SUCCESSFULLY PARSED IOHOME FRAME <<<"));
+        bool isAuth = ioNode.parseFrame(decodedFrame, decodedLen, parsedFrame);
+
+        if (IoHomeNode::validateFrameCrc(decodedFrame, decodedLen)) {
+            Serial.println(F(">>> SUCCESSFULLY RECEIVED IOHOME FRAME (CRC OK) <<<"));
             Serial.printf("Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X\n",
-                  parsedFrame.commandId,
-                  parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
-                  parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+                  decodedFrame[8],
+                  decodedFrame[2], decodedFrame[3], decodedFrame[4],
+                  decodedFrame[5], decodedFrame[6], decodedFrame[7]);
+
+            // Update Packet History (Shift older packets down)
+            if (historyCount < HISTORY_SIZE) historyCount++;
+            for (int i = HISTORY_SIZE - 1; i > 0; --i) {
+                strncpy(packetHistory[i], packetHistory[i-1], 32);
+            }
+
+            // Format new packet at the top (idx 0) using raw bytes
+            snprintf(packetHistory[0], 32, "%02X%02X%02X>%02X%02X%02X C:%02X",
+                     decodedFrame[2], decodedFrame[3], decodedFrame[4], // Source MAC
+                     decodedFrame[5], decodedFrame[6], decodedFrame[7], // Dest MAC
+                     decodedFrame[8]);                                  // Command ID
 
             // Update OLED Display
             u8g2.clearBuffer();
-            char buf[32];
-            sprintf(buf, "Cmd: 0x%02X", parsedFrame.commandId);
-            u8g2.drawStr(0, 15, buf);
-            sprintf(buf, "Src: %02X%02X%02X", parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2);
-            u8g2.drawStr(0, 35, buf);
-            sprintf(buf, "Dst: %02X%02X%02X", parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
-            u8g2.drawStr(0, 55, buf);
+            u8g2.drawStr(0, 12, "Last Packets:");
+            for (int i = 0; i < historyCount; i++) {
+                u8g2.drawStr(0, 28 + (i * 15), packetHistory[i]);
+            }
             u8g2.sendBuffer();
+
+            if (!isAuth) {
+                Serial.println(F(">>> AES PARSE FAILED (Expected until AES keys are provided) <<<"));
+            } else {
+                Serial.println(F(">>> AES AUTHENTICATION SUCCESSFUL <<<"));
+            }
         } else {
-            Serial.println(F(">>> PARSE FAILED (Expected until AES keys are provided) <<<"));
+            Serial.println(F(">>> PARSE FAILED (Invalid CRC) <<<"));
         }
       } else {
         Serial.println(F("[RAW] Discarded noise/ghost packet during UART extraction."));
