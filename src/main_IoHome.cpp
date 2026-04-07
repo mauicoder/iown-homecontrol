@@ -43,6 +43,7 @@ void setFlag(void) {
 // --- GLOBAL STATE ---
 float targetFreq = IOHOME_FREQ;
 uint32_t lastRssiUpdate = 0;
+uint32_t validPacketCount = 0;
 
 // --- PACKET HISTORY ---
 #define HISTORY_SIZE 3
@@ -69,7 +70,7 @@ void setup() {
 
   // Initialize OLED (Needs HW_VEXT to be LOW first, which we just did!)
   u8g2.begin();
-  u8g2.setFont(u8g2_font_ncenB08_tr);
+  u8g2.setFont(u8g2_font_6x10_tr);
   u8g2.clearBuffer();
   u8g2.drawStr(0, 15, "Heltec V3.2 IoHome");
   u8g2.drawStr(0, 30, "Booting...");
@@ -283,6 +284,13 @@ void loop() {
       // 1-way remotes use Direct Mode (UART bit-banging) so the payload is NOT PN9 whitened over the air!
 
       if (decodedLen > 0) {
+        // --- PHANTOM PACKET FILTER ---
+        // 0xAA preamble noise over the air decodes perfectly as 0x55 in UART 8N1.
+        // If the first two bytes are 0x55, this is just radio noise, not a real frame!
+        if (decodedFrame[0] == 0x55 && decodedFrame[1] == 0x55) {
+            goto decode_discard;
+        }
+
         Serial.print(F("[IOHOME] Decoded: "));
         for(size_t i = 0; i < decodedLen; i++) {
           if(decodedFrame[i] < 0x10) Serial.print(F("0"));
@@ -296,7 +304,8 @@ void loop() {
         bool isAuth = ioNode.parseFrame(decodedFrame, decodedLen, parsedFrame);
 
         if (IoHomeNode::validateFrameCrc(decodedFrame, decodedLen)) {
-            Serial.println(F(">>> SUCCESSFULLY RECEIVED IOHOME FRAME (CRC OK) <<<"));
+            validPacketCount++;
+            Serial.printf(">>> SUCCESSFULLY RECEIVED IOHOME FRAME #%lu (CRC OK) <<<\n", validPacketCount);
             Serial.printf("Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X\n",
                   decodedFrame[8],
                   decodedFrame[2], decodedFrame[3], decodedFrame[4],
@@ -308,15 +317,18 @@ void loop() {
                 strncpy(packetHistory[i], packetHistory[i-1], 32);
             }
 
-            // Format new packet at the top (idx 0) using raw bytes
-            snprintf(packetHistory[0], 32, "%02X%02X%02X>%02X%02X%02X C:%02X",
+            // Format new packet at the top (idx 0) with packet counter
+            snprintf(packetHistory[0], 32, "#%lu %02X%02X%02X>%02X%02X%02X %02X",
+                     validPacketCount,
                      decodedFrame[2], decodedFrame[3], decodedFrame[4], // Source MAC
                      decodedFrame[5], decodedFrame[6], decodedFrame[7], // Dest MAC
                      decodedFrame[8]);                                  // Command ID
 
             // Update OLED Display
             u8g2.clearBuffer();
-            u8g2.drawStr(0, 12, "Last Packets:");
+            char headerBuf[32];
+            snprintf(headerBuf, 32, "Valid Rx: %lu", validPacketCount);
+            u8g2.drawStr(0, 12, headerBuf);
             for (int i = 0; i < historyCount; i++) {
                 u8g2.drawStr(0, 28 + (i * 15), packetHistory[i]);
             }
@@ -331,6 +343,7 @@ void loop() {
             Serial.println(F(">>> PARSE FAILED (Invalid CRC) <<<"));
         }
       } else {
+        decode_discard:
         Serial.println(F("[RAW] Discarded noise/ghost packet during UART extraction."));
       }
 
