@@ -302,7 +302,7 @@ RSSI: -127.50 dBm | STATUS: OK
 ...
 
 
-## After implemented frequency hopping
+## After implementing the frequency hopping
 
 [RAW] Received packet! RSSI: -20.00 | Length: 255
       Data: 0F C0 10 04 01 7E 4B F7 6C 11 02 48 17 FD 01 61 40 11 84 01 00 56 14 E4 2B 3D 44 54 5C 6F 55 DE 34 6F FF FE 00 0F FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AF FB 32 1F 80 20 08 02 FC 97 EE D8 22 04 90 2F FA 02 C2 80 23 08 02 00 AC 29 C8 56 7A 88 A8 B8 DE AB BC 68 DF FF 80 00 1F FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF F5 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 5F F6 64 3F 00 40 10 05 F9 2F DD B0 44 09 20 5F F4 05
@@ -338,3 +338,48 @@ Command: 0x20 | Source: 00003F | Dest: FAB710
 [RAW] Discarded noise/ghost packet: Invalid payload length declared in header
 Freq: 868.95 MHz | RSSI: -112.00 dBm | STATUS: OK
 Freq: 869.85 MHz | RSSI: -127.50 dBm | STATUS: OK
+
+
+[RAW] Received packet! RSSI: -22.00 | Length: 255
+      Data: 37 C0 10 04 01 7E 4B F7 6C 11 00 50 16 14 97 00 40 10 05 61 1E 4F B2 74 A7 66 C5 17 8C BD 32 7F FF F8 00 00 00 00 00 00 00 00 00 04 DD FF 57 67 23 FF FF FF FF FF FF FF FF FF FF FD 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 5F F6 64 DF 00 40 10 05 F9 2F DD B0 44 01 40 58 52 5C 01 00 40 15 84 79 3E C9 D2 9D 9B 14 5E 32 F4 C9 FF FC 00 00 00 01 FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 FF 66 4D F0 04 01 00 5F 92 FD DB 04
+[IOHOME] Decoded: F6 00 00 00 3F FA B7 10 00 01 43 D2 00 00 00 0D 3C BE 72 CA B3 14 8F 7A 26
+[IoHomeNode::parseFrame] --- Starting parse for frame of length: 25 ---
+[IoHomeNode::parseFrame] Raw bytes: F6 00 00 00 3F FA B7 10 00 01 43 D2 00 00 00 0D 3C BE 72 CA B3 14 8F 7A 26
+[IoHomeNode::validateFrameCrc] Validating CRC for frame of length: 25
+[IoHomeNode::validateFrameCrc] Calculated CRC: 0x267A, Received CRC: 0x267A
+[IoHomeNode::parseFrame] Decoded Header: Ctrl0=0xF6 (Binary: 11110110), Ctrl1=0x00 (Binary: 0)
+[IoHomeNode::parseFrame] Source MAC: 00003F, Dest MAC: FAB710
+[IoHomeNode::parseFrame] Command ID: 0x00
+[IoHomeNode::parseFrame] Declared total body length from Ctrl0: 23 bytes
+[IoHomeNode::parseFrame] Assuming security footer length: 8 (Counter: 2, MAC: 6)
+[IoHomeNode::parseFrame] Extracted Security Footer: Counter=0x0D3C, MAC (first 6 bytes): BE 72 CA B3 14 8F
+[IoHomeNode::parseFrame] ERROR: MAC mismatch at byte 0: Received 0xBE, Expected 0xF5
+[IoHomeNode::validateFrameCrc] Validating CRC for frame of length: 25
+[IoHomeNode::validateFrameCrc] Calculated CRC: 0x267A, Received CRC: 0x267A
+>>> SUCCESSFULLY RECEIVED IOHOME FRAME #2 (CRC OK) <<<
+Command: 0x00 | Source: 00003F | Dest: FAB710
+>>> AES PARSE FAILED (Expected until AES keys are provided) <<<
+[RAW] Received packet! RSSI: -23.00 | Length: 255
+      Data: 0F C0 90 04 01 7E 4B F7 6C 11 02 48 17 FD 01 61 48 11 84 01 00 56 15 E5 13 77 40 F7 A5 2D 18 D0 F3 97 FF 80 01 FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 FF 66 43 F0 04 01 00 5F 92 FD DB 04 40 92 05 FF 40 58 52 04 61 00 40 15 85 79 44 DD D0 3D E9 4B 46 32 DC FD FF E0 00 00 07 FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FD 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 55 57 FD 99 0F C0 10 04 01 7E 4B F7 6C 11 02 48 17 FD 01
+[RAW] Discarded noise/ghost packet: Preamble noise (0x55 0x55)
+[RAW] Received packet! RSSI: -23.50 | Length: 255
+      Data: 0F C0 10 04 01 7E 4B F7 6C 11 02 48 17 FD 01 61 48 15 05 FF 00 56 13 E5 F9 7A D5 16 A4 A7 0A 4A F7 C7 FF FF 00 00 3F FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF EA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA BF EC C8 7E 00 80 20 0B F2 5F BB 60 88 12 40 BF E8 0B 0A 40 A8 2F F8 02 B0 9F 2F CB D6 A8 B5 25 38 52 57 BE 3F FE 00 00 03 FF FF FF FF FF FF FF FF FF FF FF FF FF FF FF FE AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AA AB FE CC 87 E0 08 02 00 BF 25 FB B6 08 81 24 0B FE
+[IOHOME] Decoded: F8 00 00 00 3F FA B7 10 20 02 FF 01 43 02 05 FF 00 0D 3E 3F AF 15 2B CA 28 EA 1F
+[IoHomeNode::parseFrame] --- Starting parse for frame of length: 27 ---
+[IoHomeNode::parseFrame] Raw bytes: F8 00 00 00 3F FA B7 10 20 02 FF 01 43 02 05 FF 00 0D 3E 3F AF 15 2B CA 28 EA 1F
+[IoHomeNode::validateFrameCrc] Validating CRC for frame of length: 27
+[IoHomeNode::validateFrameCrc] Calculated CRC: 0x1FEA, Received CRC: 0x1FEA
+[IoHomeNode::parseFrame] Decoded Header: Ctrl0=0xF8 (Binary: 11111000), Ctrl1=0x00 (Binary: 0)
+[IoHomeNode::parseFrame] Source MAC: 00003F, Dest MAC: FAB710
+[IoHomeNode::parseFrame] Command ID: 0x20
+[IoHomeNode::parseFrame] Declared total body length from Ctrl0: 25 bytes
+[IoHomeNode::parseFrame] Assuming security footer length: 8 (Counter: 2, MAC: 6)
+[IoHomeNode::parseFrame] Extracted Security Footer: Counter=0x0D3E, MAC (first 6 bytes): 3F AF 15 2B CA 28
+[IoHomeNode::parseFrame] ERROR: MAC mismatch at byte 0: Received 0x3F, Expected 0x33
+[IoHomeNode::validateFrameCrc] Validating CRC for frame of length: 27
+[IoHomeNode::validateFrameCrc] Calculated CRC: 0x1FEA, Received CRC: 0x1FEA
+>>> SUCCESSFULLY RECEIVED IOHOME FRAME #3 (CRC OK) <<<
+Command: 0x20 | Source: 00003F | Dest: FAB710
+>>> AES PARSE FAILED (Expected until AES keys are provided) <<<
+Freq: 868.95 MHz | RSSI: -120.50 dBm | STATUS: OK
+Freq: 868.95 MHz | RSSI: -123.50 dBm | STATUS: OK
