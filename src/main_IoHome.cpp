@@ -67,6 +67,87 @@ uint8_t stackKey[16] = {0};
 uint8_t systemKey[16] = {0};
 IoHomeNode ioNode(&radio, &ioHomeChannel);
 
+// --- PERSISTENT STATE MACHINE PARSER ---
+class IoHomeStreamParser {
+private:
+    static const size_t BUFFER_SIZE = 1024;
+    uint8_t buffer[BUFFER_SIZE];
+    size_t length = 0;
+
+    int frameBit = 0; // 0: wait for start, 1..8: data, 9: stop
+    uint16_t currentData = 0;
+
+    void consume(size_t count) {
+        if (count >= length) {
+            length = 0;
+        } else {
+            size_t remaining = length - count;
+            memmove(buffer, buffer + count, remaining);
+            length = remaining;
+        }
+    }
+
+public:
+    void pushBytes(const uint8_t* bytes, size_t len) {
+        for (size_t i = 0; i < len; i++) {
+            for (int b = 7; b >= 0; b--) {
+                uint8_t bit = (bytes[i] >> b) & 0x01;
+                if (frameBit == 0) {
+                    if (bit == 0) { // Found Start bit (0)
+                        frameBit = 1;
+                        currentData = 0;
+                    }
+                } else if (frameBit >= 1 && frameBit <= 8) {
+                    currentData |= (bit << (frameBit - 1)); // LSB first
+                    frameBit++;
+                } else if (frameBit == 9) {
+                    if (bit == 1) { // Valid Stop bit (1)
+                        if (length < BUFFER_SIZE) {
+                            buffer[length++] = currentData;
+                        }
+                    }
+                    frameBit = 0; // Reset for next byte
+                }
+            }
+        }
+    }
+
+    bool extractNextFrame(IoHomeNode& ioNode, IoHomeFrame_t& outFrame, bool& outAuthStatus) {
+        size_t searchIdx = 0;
+        Serial.printf(">>> Searching rolling buffer (Current length: %zu bytes)\n", length);
+
+        while (searchIdx + 2 + IOHOME_MIN_FRAME_LEN <= length) {
+            if (buffer[searchIdx] == 0xFF && buffer[searchIdx+1] == 0x33) {
+                size_t packetStart = searchIdx + 2;
+                size_t remainingLen = length - packetStart;
+                uint8_t* candidateData = &buffer[packetStart];
+
+                size_t declaredBodyLen = (candidateData[0] & 0x1F) + 1;
+                size_t expectedTotalLen = declaredBodyLen + IOHOME_FRAME_CRC_LEN;
+
+                if (expectedTotalLen >= IOHOME_MIN_FRAME_LEN && expectedTotalLen <= 64) {
+                    if (expectedTotalLen <= remainingLen) {
+                        if (IoHomeNode::validateFrameCrc(candidateData, expectedTotalLen)) {
+                            outAuthStatus = ioNode.parseFrame(candidateData, expectedTotalLen, outFrame);
+                            consume(packetStart + expectedTotalLen); // Remove parsed packet
+                            return true; // We found one!
+                        }
+                    } else {
+                        Serial.printf("    [Parser] Found Sync Word, but packet is split. Waiting for next chunk.\n");
+                        break; // Valid-looking header, but packet is split. Wait for next chunk.
+                    }
+                }
+            }
+            searchIdx++;
+        }
+        if (searchIdx > 0) consume(searchIdx); // Drop evaluated garbage
+        if (length > BUFFER_SIZE - 256) consume(length - 64); // Safe fallback
+        return false;
+    }
+};
+
+IoHomeStreamParser streamParser;
+
 void setup() {
   // 1. MANDATORY POWER SEQUENCE (The "Yellow Arrow" Fix)
   pinMode(HW_VEXT, OUTPUT);
@@ -251,135 +332,47 @@ void loop() {
       }
       Serial.println();
 
-      // --- 1. EXTRACT 8-BIT DATA FROM 10-BIT UART FRAMES ---
-      uint8_t decodedFrame[IOHOME_MAX_FIFO_LEN];
-      size_t decodedLen = 0;
-      uint16_t currentData = 0;
-      int frameBit = 0; // 0: wait for start, 1..8: data, 9: stop
-      int idleBits = 0;
-      const char* discardReason = "No valid UART frame found";
+      // --- 1. CONTINUOUS STATE MACHINE DECODING ---
+      // Feed raw bits into the state machine
+      streamParser.pushBytes(byteArr, len);
 
-      for(int i = 0; i < len; i++) {
-        // The SX1262 packs bits MSB-first chronologically
-        for(int b = 7; b >= 0; b--) {
-          uint8_t bit = (byteArr[i] >> b) & 0x01;
+      // --- 2. EXTRACT MULTIPLE/SPLIT FRAMES ---
+      IoHomeFrame_t parsedFrame;
+      bool isAuth;
+      while (streamParser.extractNextFrame(ioNode, parsedFrame, isAuth)) {
+          validPacketCount++;
 
-          if (frameBit == 0) {
-            if (bit == 0) {
-              // Found Start bit (0)
-              frameBit = 1;
-              currentData = 0;
-              idleBits = 0;
-            } else {
-              // Line is idle (1)
-              idleBits++;
-              if (idleBits > IOHOME_UART_IDLE_BITS_MAX && decodedLen > 0) {
-                size_t expectedLen = (decodedFrame[0] & 0x1F) + 1 + 2;
-                // Minimum valid frame size validation. If it's shorter, it's garbage noise.
-                if (expectedLen >= IOHOME_MIN_FRAME_LEN && decodedLen >= expectedLen) {
-                  goto decode_done;
-                } else {
-                  discardReason = "Frame too short or incomplete";
-                  decodedLen = 0; // Reset and keep searching this buffer!
-                }
-              }
-            }
-          } else if (frameBit >= 1 && frameBit <= 8) {
-            // Data bits (UART sends LSB first, so we shift into place)
-            currentData |= (bit << (frameBit - 1));
-            frameBit++;
-          } else if (frameBit == 9) {
-            // Validate Stop bit (1) to prevent framing errors
-            if (bit == 1) {
-              decodedFrame[decodedLen++] = currentData;
-            } else {
-              discardReason = "UART framing error (missing Stop bit)";
-              decodedLen = 0; // Framing error, discard chunk
-            }
-            frameBit = 0;
+          Serial.printf(">>> SUCCESSFULLY RECEIVED IOHOME FRAME #%lu (CRC OK) <<<\n", validPacketCount);
+          Serial.printf("    Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X\n",
+                parsedFrame.commandId,
+                parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
+                parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+
+          if (!isAuth) {
+              Serial.println(F("    >>> AES MAC VERIFICATION FAILED (Or No Keys) <<<"));
+          } else {
+              Serial.println(F("    >>> AES AUTHENTICATION SUCCESSFUL <<<"));
           }
-        }
-      }
-      decode_done:
 
-      // --- 1.5 TRUNCATE TRAILING NOISE/PADDING ---
-      if (decodedLen > 0) {
-        size_t expectedLen = (decodedFrame[0] & 0x1F) + 1 + 2; // FieldValue + 1 (Body) + 2 (CRC)
-        if (expectedLen >= IOHOME_MIN_FRAME_LEN && expectedLen <= decodedLen) {
-          decodedLen = expectedLen;
-        } else {
-          discardReason = "Invalid payload length declared in header";
-          decodedLen = 0; // Completely invalid length
-        }
-      }
+          // Update OLED
+          if (historyCount < HISTORY_SIZE) historyCount++;
+          for (int h = HISTORY_SIZE - 1; h > 0; --h) {
+              strncpy(packetHistory[h], packetHistory[h-1], 32);
+          }
+          snprintf(packetHistory[0], 32, "#%lu %02X%02X%02X>%02X%02X%02X %02X",
+                   validPacketCount,
+                   parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
+                   parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2,
+                   parsedFrame.commandId);
 
-      // --- 2. DE-WHITEN THE PAYLOAD ---
-      // 1-way remotes use Direct Mode (UART bit-banging) so the payload is NOT PN9 whitened over the air!
-
-      if (decodedLen > 0) {
-        // --- PHANTOM PACKET FILTER ---
-        // 0xAA preamble noise over the air decodes perfectly as 0x55 in UART 8N1.
-        // If the first two bytes are 0x55, this is just radio noise, not a real frame!
-        if (decodedFrame[0] == 0x55 && decodedFrame[1] == 0x55) {
-            discardReason = "Preamble noise (0x55 0x55)";
-            goto decode_discard;
-        }
-
-        Serial.print(F("[IOHOME] Decoded: "));
-        for(size_t i = 0; i < decodedLen; i++) {
-          if(decodedFrame[i] < 0x10) Serial.print(F("0"));
-          Serial.print(decodedFrame[i], HEX);
-          Serial.print(F(" "));
-        }
-        Serial.println();
-
-        // --- 3. ATTEMPT TO PARSE ---
-        IoHomeFrame_t parsedFrame;
-        bool isAuth = ioNode.parseFrame(decodedFrame, decodedLen, parsedFrame);
-
-        if (IoHomeNode::validateFrameCrc(decodedFrame, decodedLen)) {
-            validPacketCount++;
-            Serial.printf(">>> SUCCESSFULLY RECEIVED IOHOME FRAME #%lu (CRC OK) <<<\n", validPacketCount);
-            Serial.printf("Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X\n",
-                  decodedFrame[8],
-                  decodedFrame[2], decodedFrame[3], decodedFrame[4],
-                  decodedFrame[5], decodedFrame[6], decodedFrame[7]);
-
-            // Update Packet History (Shift older packets down)
-            if (historyCount < HISTORY_SIZE) historyCount++;
-            for (int i = HISTORY_SIZE - 1; i > 0; --i) {
-                strncpy(packetHistory[i], packetHistory[i-1], 32);
-            }
-
-            // Format new packet at the top (idx 0) with packet counter
-            snprintf(packetHistory[0], 32, "#%lu %02X%02X%02X>%02X%02X%02X %02X",
-                     validPacketCount,
-                     decodedFrame[2], decodedFrame[3], decodedFrame[4], // Source MAC
-                     decodedFrame[5], decodedFrame[6], decodedFrame[7], // Dest MAC
-                     decodedFrame[8]);                                  // Command ID
-
-            // Update OLED Display
-            u8g2.clearBuffer();
-            char headerBuf[32];
-            snprintf(headerBuf, 32, "Valid Rx: %lu", validPacketCount);
-            u8g2.drawStr(0, 12, headerBuf);
-            for (int i = 0; i < historyCount; i++) {
-                u8g2.drawStr(0, 28 + (i * 15), packetHistory[i]);
-            }
-            u8g2.sendBuffer();
-
-            if (!isAuth) {
-                Serial.println(F(">>> AES PARSE FAILED (Expected until AES keys are provided) <<<"));
-            } else {
-                Serial.println(F(">>> AES AUTHENTICATION SUCCESSFUL <<<"));
-            }
-        } else {
-            Serial.println(F(">>> PARSE FAILED (Invalid CRC) <<<"));
-        }
-      } else {
-        decode_discard:
-        Serial.print(F("[RAW] Discarded noise/ghost packet: "));
-        Serial.println(discardReason);
+          u8g2.clearBuffer();
+          char headerBuf[32];
+          snprintf(headerBuf, 32, "Valid Rx: %lu", validPacketCount);
+          u8g2.drawStr(0, 12, headerBuf);
+          for (int h = 0; h < historyCount; h++) {
+              u8g2.drawStr(0, 28 + (h * 15), packetHistory[h]);
+          }
+          u8g2.sendBuffer();
       }
 
     } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
