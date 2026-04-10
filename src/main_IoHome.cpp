@@ -41,7 +41,14 @@ void setFlag(void) {
   receivedFlag = true;
 }
 // --- GLOBAL STATE ---
-float targetFreq = IOHOME_FREQ;
+const float IOHOME_FREQUENCIES[3] = { 868.25f, 868.95f, 869.85f };
+uint8_t currentFreqIndex = 0;
+float targetFreq = IOHOME_FREQUENCIES[0];
+
+uint32_t lastHopTime = 0;
+const uint32_t HOP_INTERVAL_MS = 10; // Hop every 10ms
+const float RSSI_HOP_THRESHOLD = -95.0; // Pause hopping if signal is stronger than this
+
 uint32_t lastRssiUpdate = 0;
 uint32_t validPacketCount = 0;
 
@@ -172,6 +179,25 @@ void setup() {
 }
 
 void loop() {
+  // --- 0. CHANNEL HOPPING ---
+  if (!receivedFlag && (millis() - lastHopTime >= HOP_INTERVAL_MS)) {
+    float rssi = radio.getRSSI(false); // Check instantaneous RSSI
+
+    if (rssi < RSSI_HOP_THRESHOLD) {
+      // Channel is quiet (below noise floor), hop to the next frequency
+      currentFreqIndex = (currentFreqIndex + 1) % 3;
+      targetFreq = IOHOME_FREQUENCIES[currentFreqIndex];
+
+      radio.standby();
+      radio.setFrequency(targetFreq);
+      radio.startReceive();
+      lastHopTime = millis();
+    } else {
+      // Signal detected! Pause hopping for 20ms to allow the packet to arrive
+      lastHopTime = millis() + 20;
+    }
+  }
+
   // --- 1. MONITOR RSSI (Ambient Noise) ---
   if (millis() - lastRssiUpdate > 1000) {
     lastRssiUpdate = millis();
@@ -179,6 +205,9 @@ void loop() {
     // Get instantaneous RSSI to verify the antenna is "live"
     float currentRssi = radio.getRSSI(false); // Use 'false' for instantaneous RSSI
 
+    Serial.print(F("Freq: "));
+    Serial.print(targetFreq);
+    Serial.print(F(" MHz | "));
     Serial.print(F("RSSI: "));
     Serial.print(currentRssi);
     Serial.print(F(" dBm | "));
@@ -228,6 +257,7 @@ void loop() {
       uint16_t currentData = 0;
       int frameBit = 0; // 0: wait for start, 1..8: data, 9: stop
       int idleBits = 0;
+      const char* discardReason = "No valid UART frame found";
 
       for(int i = 0; i < len; i++) {
         // The SX1262 packs bits MSB-first chronologically
@@ -249,6 +279,7 @@ void loop() {
                 if (expectedLen >= IOHOME_MIN_FRAME_LEN && decodedLen >= expectedLen) {
                   goto decode_done;
                 } else {
+                  discardReason = "Frame too short or incomplete";
                   decodedLen = 0; // Reset and keep searching this buffer!
                 }
               }
@@ -262,6 +293,7 @@ void loop() {
             if (bit == 1) {
               decodedFrame[decodedLen++] = currentData;
             } else {
+              discardReason = "UART framing error (missing Stop bit)";
               decodedLen = 0; // Framing error, discard chunk
             }
             frameBit = 0;
@@ -276,6 +308,7 @@ void loop() {
         if (expectedLen >= IOHOME_MIN_FRAME_LEN && expectedLen <= decodedLen) {
           decodedLen = expectedLen;
         } else {
+          discardReason = "Invalid payload length declared in header";
           decodedLen = 0; // Completely invalid length
         }
       }
@@ -288,6 +321,7 @@ void loop() {
         // 0xAA preamble noise over the air decodes perfectly as 0x55 in UART 8N1.
         // If the first two bytes are 0x55, this is just radio noise, not a real frame!
         if (decodedFrame[0] == 0x55 && decodedFrame[1] == 0x55) {
+            discardReason = "Preamble noise (0x55 0x55)";
             goto decode_discard;
         }
 
@@ -344,7 +378,8 @@ void loop() {
         }
       } else {
         decode_discard:
-        Serial.println(F("[RAW] Discarded noise/ghost packet during UART extraction."));
+        Serial.print(F("[RAW] Discarded noise/ghost packet: "));
+        Serial.println(discardReason);
       }
 
     } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
@@ -359,5 +394,6 @@ void loop() {
 
     // Put the radio back into listening mode
     radio.startReceive();
+    lastHopTime = millis(); // Reset hopping timer
   }
 }
