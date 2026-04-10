@@ -1,5 +1,11 @@
 # Here is a collection of packets valid or invalid received from the heltec lora 32 v3
 
+## usefull link
+https://github.com/merbanan/rtl_433/issues/1376
+````
+In my opinion you have 27 bytes with Sync, Length, address, command, 7 bytes Rolling code and 2 bytes CRC-16 Kermit Polynom: 0x1021, Init 0x0000, Final XOR: 0x0000 at the end.
+```
+
 Some packets are received when the rssi is way too low for a valid signal. These packets are usually garbage.
 
 
