@@ -3,6 +3,7 @@
 #include <RadioLib.h>
 #include "IoHome.h" // Include the IoHome library header
 #include <Wire.h>
+#include <Preferences.h>
 #include <U8g2lib.h>
 
 // --- HELTEC V3.2 PIN MAPPING ---
@@ -60,12 +61,48 @@ uint8_t historyCount = 0;
 // --- IOHOME LIBRARY OBJECTS ---
 // Define the channel based on targetFreq
 IoHomeChannel_t ioHomeChannel = { .c0 = IOHOME_CHAN_C0, .c1 = IOHOME_CHAN_C1 };
-// Placeholder NodeIDs and keys - replace with your actual values
+
+Preferences preferences;
+
+// Default to zeroed keys/addresses. Will be loaded from NVRAM on boot.
 NodeId sourceNodeId = {0x00, 0x00, 0x00};
 NodeId destNodeId = {0x00, 0x00, 0x00};
 uint8_t stackKey[16] = {0};
 uint8_t systemKey[16] = {0};
 IoHomeNode ioNode(&radio, &ioHomeChannel);
+
+// --- CONFIGURATION MANAGEMENT ---
+void loadConfiguration() {
+    preferences.begin("iohome", true); // true = read-only mode
+
+    if (preferences.getBytesLength("sourceNode") == sizeof(NodeId)) {
+        preferences.getBytes("sourceNode", &sourceNodeId, sizeof(NodeId));
+        Serial.printf("Loaded NodeID: %02X%02X%02X\n", sourceNodeId.n0, sourceNodeId.n1, sourceNodeId.n2);
+    } else {
+        Serial.println("No NodeID in config. Using defaults.");
+    }
+
+    if (preferences.getBytesLength("stackKey") == 16) {
+        preferences.getBytes("stackKey", stackKey, 16);
+        Serial.println("Loaded 16-byte Stack Key from config.");
+    } else {
+        Serial.println("No Stack Key in config. Using defaults.");
+    }
+
+    preferences.end();
+}
+
+void saveConfiguration(NodeId newNode, const uint8_t* newKey) {
+    preferences.begin("iohome", false); // false = read/write mode
+    preferences.putBytes("sourceNode", &newNode, sizeof(NodeId));
+    preferences.putBytes("stackKey", newKey, 16);
+    preferences.end();
+
+    // Update active RAM variables
+    sourceNodeId = newNode;
+    memcpy(stackKey, newKey, 16);
+    Serial.println("Configuration successfully saved to NVRAM!");
+}
 
 // --- PERSISTENT STATE MACHINE PARSER ---
 class IoHomeStreamParser {
@@ -171,6 +208,11 @@ void setup() {
 
   Serial.println(F("   HELTEC V3.2 IoHome NODE     "));
   Serial.println(F("==============================="));
+
+  // --- LOAD CONFIGURATION FROM NVRAM ---
+  loadConfiguration();
+
+  // =========================================================================
 
   // 2. MANUAL RESET (Ensures Silicon is fresh)
   pinMode(LORA_NRST, OUTPUT);

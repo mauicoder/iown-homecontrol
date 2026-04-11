@@ -164,8 +164,8 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   frame[offset++] = ctrlByte1;
 
   // MACs
-  frame[offset++] = sourceMac.n0; frame[offset++] = sourceMac.n1; frame[offset++] = sourceMac.n2;
   frame[offset++] = destMac.n0;   frame[offset++] = destMac.n1;   frame[offset++] = destMac.n2;
+  frame[offset++] = sourceMac.n0; frame[offset++] = sourceMac.n1; frame[offset++] = sourceMac.n2;
 
   // Command
   frame[offset++] = commandId;
@@ -189,18 +189,57 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   // 1. Load the 16-byte Stack Key
   mbedtls_aes_setkey_enc(&aes, this->_stack_key, 128);
 
-  // 2. Prepare the Input Block (16 bytes)
-  // Per io-homecontrol: MAC = AES128(Header[8] | Command[1] | Counter[2] | Padding[5])
-  uint8_t input_block[16] = {0};
-  std::copy(frame.begin(), frame.begin() + 8, input_block);     // Header
-  input_block[8] = commandId;                                   // Command
-  input_block[9] = (uint8_t)(this->_sequence_counter >> 8);     // Counter High
-  input_block[10] = (uint8_t)(this->_sequence_counter & 0xFF);  // Counter Low
-  // Bytes 11-15 remain 0x00 (standard padding)
+  // 2. Build the Initial Vector (IV) for MAC generation
+  bool isOneWay = (finalCtrlByte0 & 0x20) != 0; // Bit 5 = isOneWay
+  uint8_t iv[16];
 
-  // 3. Encrypt the block
+  size_t cmd_payload_len = 1 + payload.size();
+  uint8_t cmd_payload_buf[32] = {0};
+  cmd_payload_buf[0] = commandId;
+  for (size_t i = 0; i < payload.size(); i++) {
+      cmd_payload_buf[1 + i] = payload[i];
+  }
+
+  // IV[0-7]: First 8 bytes of Cmd+Payload padded with 0x55
+  for(size_t i = 0; i < 8; i++) {
+      if (i < cmd_payload_len) {
+          iv[i] = cmd_payload_buf[i];
+      } else {
+          iv[i] = 0x55;
+      }
+  }
+
+  // IV[8-9]: Checksum over Header + Cmd + Payload
+  size_t checksum_len = 8 + cmd_payload_len;
+  uint8_t c1 = 0, c2 = 0;
+  for (size_t i = 0; i < checksum_len; i++) {
+      uint8_t tmp = frame[i] ^ c2;
+      uint8_t next_c1 = (c1 << 1) & 0xFE;
+      if ((c1 & 0x80) == 0) {
+          if (tmp >= 128) next_c1 |= 1;
+          c1 = next_c1;
+          c2 = (tmp << 1) & 0xFF;
+      } else {
+          if (tmp >= 128) next_c1 |= 1;
+          c1 = next_c1 ^ 0x55;
+          c2 = ((tmp << 1) ^ 0x5B) & 0xFF;
+      }
+  }
+  iv[8] = c1;
+  iv[9] = c2;
+
+  if (isOneWay) {
+      // 1W Mode IV[10-15]: Counter + Padding
+      iv[10] = (uint8_t)((this->_sequence_counter >> 8) & 0xFF);
+      iv[11] = (uint8_t)(this->_sequence_counter & 0xFF);
+      iv[12] = 0x55; iv[13] = 0x55; iv[14] = 0x55; iv[15] = 0x55;
+  } else {
+      // 2W Mode IV[10-15]: Challenge (Requires state management for previous challenge)
+      for (int i = 10; i < 16; i++) iv[i] = 0x00;
+  }
+
   uint8_t output_block[16] = {0};
-  mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, input_block, output_block);
+  mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, iv, output_block);
 
   // 4. Extract 6 bytes and insert into frame
   for (int i = 0; i < IOHOME_SECURITY_MAC_LEN; i++) {
@@ -253,13 +292,13 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     parsedFrame.ctrlByte0 = frame[offset++];
     parsedFrame.ctrlByte1 = frame[offset++];
 
-    parsedFrame.sourceMac.n0 = frame[offset++];
-    parsedFrame.sourceMac.n1 = frame[offset++];
-    parsedFrame.sourceMac.n2 = frame[offset++];
+  parsedFrame.destMac.n0 = frame[offset++];
+  parsedFrame.destMac.n1 = frame[offset++];
+  parsedFrame.destMac.n2 = frame[offset++];
 
-    parsedFrame.destMac.n0 = frame[offset++];
-    parsedFrame.destMac.n1 = frame[offset++];
-    parsedFrame.destMac.n2 = frame[offset++];
+  parsedFrame.sourceMac.n0 = frame[offset++];
+  parsedFrame.sourceMac.n1 = frame[offset++];
+  parsedFrame.sourceMac.n2 = frame[offset++];
 
     // 4. Extract Command ID
     parsedFrame.commandId = frame[offset++];
@@ -337,21 +376,59 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     // --- CRYPTOGRAPHIC VERIFICATION ---
     mbedtls_aes_context aes;
     mbedtls_aes_init(&aes);
-
-    uint8_t input_block[16] = {0};
-    // The input block for AES is always 16 bytes.
-    // It's derived from the first 8 bytes of the frame (Ctrl0, Ctrl1, SrcMAC, DestMAC),
-    // followed by the Command ID, the 2-byte rolling counter, and then padding to 16 bytes.
-    for(int i = 0; i < 8; i++) { input_block[i] = frame[i]; }
-    input_block[8] = parsedFrame.commandId;
-    input_block[9] = (uint8_t)(rxCounter >> 8);
-    input_block[10] = (uint8_t)(rxCounter & 0xFF);
-
-    // Calculate the expected MAC based on the full 6-byte MAC length for comparison.
-    // If the actual frame has a shorter MAC, we will compare only the available bytes.
-    uint8_t expected_block[16] = {0};
     mbedtls_aes_setkey_enc(&aes, this->_stack_key, 128);
-    mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, input_block, expected_block);
+
+    // --- IO-HOMECONTROL MAC GENERATION ---
+    bool isOneWay = (parsedFrame.ctrlByte0 & 0x20) != 0; // Bit 5 is OneWay
+
+    uint8_t iv[16];
+    size_t cmd_payload_len = 1 + parsedFrame.payload.size();
+    uint8_t cmd_payload_buf[32] = {0};
+    cmd_payload_buf[0] = parsedFrame.commandId;
+    for(size_t i = 0; i < parsedFrame.payload.size(); i++) {
+        cmd_payload_buf[1 + i] = parsedFrame.payload[i];
+    }
+
+    // IV[0-7]: First 8 bytes of Cmd+Payload padded with 0x55
+    for(size_t i = 0; i < 8; i++) {
+        if (i < cmd_payload_len) {
+            iv[i] = cmd_payload_buf[i];
+        } else {
+            iv[i] = 0x55;
+        }
+    }
+
+    // IV[8-9]: Custom Checksum over Header + Cmd + Payload
+    size_t checksum_len = 8 + cmd_payload_len;
+    uint8_t c1 = 0, c2 = 0;
+    for(size_t i = 0; i < checksum_len; i++) {
+        uint8_t tmp = frame[i] ^ c2;
+        uint8_t next_c1 = (c1 << 1) & 0xFE;
+        if ((c1 & 0x80) == 0) {
+            if (tmp >= 128) next_c1 |= 1;
+            c1 = next_c1;
+            c2 = (tmp << 1) & 0xFF;
+        } else {
+            if (tmp >= 128) next_c1 |= 1;
+            c1 = next_c1 ^ 0x55;
+            c2 = ((tmp << 1) ^ 0x5B) & 0xFF;
+        }
+    }
+    iv[8] = c1;
+    iv[9] = c2;
+
+    if (isOneWay) {
+        // 1W Mode: IV[10-15] is Counter + Padding
+        iv[10] = (uint8_t)(rxCounter >> 8);
+        iv[11] = (uint8_t)(rxCounter & 0xFF);
+        iv[12] = 0x55; iv[13] = 0x55; iv[14] = 0x55; iv[15] = 0x55;
+    } else {
+        // 2W Mode: IV[10-15] is Challenge (Assuming 0x00 placeholder if untracked)
+        for (int i=10; i<16; i++) iv[i] = 0x00;
+    }
+
+    uint8_t expected_block[16] = {0};
+    mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, iv, expected_block);
 
     bool macMatch = true;
     // Compare only the number of MAC bytes we actually received
@@ -367,6 +444,24 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     mbedtls_aes_free(&aes);
 
     if (!macMatch) {
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+        Serial.println("[IoHomeNode::parseFrame] --- AES Verification Failed Details ---");
+        Serial.print("[IoHomeNode::parseFrame] Stack Key    : ");
+        for(int i = 0; i < 16; i++) Serial.printf("%02X ", this->_stack_key[i]);
+        Serial.println();
+
+        Serial.print("[IoHomeNode::parseFrame] AES IV Block : ");
+        for(size_t i = 0; i < 16; i++) Serial.printf("%02X ", iv[i]);
+        Serial.println();
+
+        Serial.print("[IoHomeNode::parseFrame] Expected MAC : ");
+        for(int i = 0; i < 16; i++) Serial.printf("%02X ", expected_block[i]);
+        Serial.println();
+
+        Serial.print("[IoHomeNode::parseFrame] Received MAC : ");
+        for(size_t i = 0; i < actual_security_mac_len; i++) Serial.printf("%02X ", rxMac[i]);
+        Serial.println("\n[IoHomeNode::parseFrame] -----------------------------------------");
+#endif
         parsedFrame.isValid = false;
         return false;
     }
