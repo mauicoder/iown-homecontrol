@@ -79,7 +79,8 @@ bool IoHomeParser::decodeHeader(const uint8_t* frame, size_t frameLength, IoHome
     size_t total_body_bytes = (parsedFrame.ctrlByte0 & 0x1F) + 1;
     outActualMacLen = IOHOME_SECURITY_MAC_LEN;
     if (parsedFrame.commandId == 0x30) {
-        outActualMacLen = 2; // 0x30 Command specific short MAC
+        // The 0x30 command blindly broadcasts the key with NO MAC signature attached.
+        outActualMacLen = 0;
     }
     size_t actual_security_footer_len = IOHOME_SECURITY_COUNTER_LEN + outActualMacLen;
 

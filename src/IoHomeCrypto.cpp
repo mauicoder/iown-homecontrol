@@ -9,6 +9,8 @@
 
 bool IoHomeCrypto::decryptTransferKey(const IoHomeFrame_t& parsedFrame, uint8_t* outKey) {
     uint8_t transfer_iv[16];
+    // The IV is the Source MAC repeated to fill 16 bytes.
+    // It must use the exact Over-The-Air byte order (n0, n1, n2).
     uint8_t mac_bytes[3] = { parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2 };
     for (int i = 0; i < 16; i++) {
         transfer_iv[i] = mac_bytes[i % 3];
@@ -23,9 +25,17 @@ bool IoHomeCrypto::decryptTransferKey(const IoHomeFrame_t& parsedFrame, uint8_t*
     mbedtls_aes_crypt_ecb(&aes_transfer, MBEDTLS_AES_ENCRYPT, transfer_iv, encrypted_iv);
     mbedtls_aes_free(&aes_transfer);
 
+    // Extract the true Stack Key by XORing the encrypted payload with the AES-encrypted IV.
     for (int i = 0; i < 16; i++) {
         outKey[i] = parsedFrame.payload[i] ^ encrypted_iv[i];
     }
+
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+    Serial.print("    [IoHomeCrypto] Plaintext Payload (Reference): ");
+    for (int i = 0; i < 16; i++) Serial.printf("%02X ", parsedFrame.payload[i]);
+    Serial.println();
+#endif
+
     return true;
 }
 
@@ -47,10 +57,11 @@ void IoHomeCrypto::generateMac(const IoHomeFrame_t& parsedFrame, const uint8_t* 
         iv[i] = (i < cmd_payload_len) ? cmd_payload_buf[i] : 0x55;
     }
 
-    size_t checksum_len = 8 + cmd_payload_len;
+    // Checksum is ONLY calculated over Cmd + Payload.
+    size_t checksum_len = cmd_payload_len;
     uint8_t c1 = 0, c2 = 0;
     for(size_t i = 0; i < checksum_len; i++) {
-        uint8_t tmp = frameData[i] ^ c2;
+        uint8_t tmp = cmd_payload_buf[i] ^ c2;
         uint8_t next_c1 = (c1 << 1) & 0xFE;
         if ((c1 & 0x80) == 0) {
             if (tmp >= 128) next_c1 |= 1;
