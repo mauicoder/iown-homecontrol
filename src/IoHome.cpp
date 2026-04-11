@@ -1,4 +1,6 @@
 #include "IoHome.h"
+#include "IoHomeParser.h"
+#include "IoHomeCrypto.h"
 #include <RadioLib.h>
 #include <mbedtls/aes.h>
 #include <stdexcept>
@@ -51,19 +53,7 @@ int16_t IoHomeNode::begin(const IoHomeChannel_t* channel,
 }
 
 uint16_t IoHomeNode::crc16(const uint8_t* data, size_t length) {
-  // CRC-16/CCITT (KERMIT) - Polynomial: 0x8408 (0x1021 bit-reversed), Init: 0x0000
-  uint16_t crc = 0x0000;
-  for (size_t i = 0; i < length; i++) {
-    crc ^= data[i];
-    for (uint8_t bit = 0; bit < 8; bit++) {
-      if (crc & 0x0001) {
-        crc = (crc >> 1) ^ IOHOME_CRC_POLY;
-      } else {
-        crc >>= 1;
-      }
-    }
-  }
-  return crc;
+  return IoHomeParser::crc16(data, length);
 }
 
 // Helper function to reverse the bit order of a byte.
@@ -106,27 +96,7 @@ void IoHomeNode::deWhiten(uint8_t* data, size_t length) {
 }
 
 bool IoHomeNode::validateFrameCrc(const uint8_t* frame, size_t frameLength) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-  Serial.printf("[IoHomeNode::validateFrameCrc] Validating CRC for frame of length: %u\n", frameLength);
-#endif
-  if (frameLength < IOHOME_FRAME_CRC_LEN) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::validateFrameCrc] Frame too short (len %u) to contain CRC (min %u).\n", frameLength, IOHOME_FRAME_CRC_LEN);
-#endif
-    return false; // Frame too short to even contain a CRC
-  }
-
-  // Calculate CRC over the data portion (excluding the 2 CRC bytes at the end)
-  uint16_t calculatedCrc = IoHomeNode::crc16(frame, IOHOME_FRAME_CRC_POS(frameLength));
-
-  // Extract the received CRC from the end of the frame
-  // io-homecontrol CRC is transmitted Little-Endian
-  uint16_t receivedCrc = frame[IOHOME_FRAME_CRC_POS(frameLength)] | (frame[IOHOME_FRAME_CRC_POS(frameLength) + 1] << 8);
-
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-  Serial.printf("[IoHomeNode::validateFrameCrc] Calculated CRC: 0x%04X, Received CRC: 0x%04X\n", calculatedCrc, receivedCrc);
-#endif
-  return calculatedCrc == receivedCrc;
+  return IoHomeParser::validateFrameCrc(frame, frameLength);
 }
 
 std::vector<uint8_t> IoHomeNode::buildFrame(
@@ -182,71 +152,20 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   frame[offset++] = (uint8_t)((this->_sequence_counter >> 8) & 0xFF); // High Byte
   frame[offset++] = (uint8_t)(this->_sequence_counter & 0xFF);        // Low Byte
 
-// --- LAYER 3: AES-128 MAC (Message Authentication Code) ---
-  mbedtls_aes_context aes;
-  mbedtls_aes_init(&aes);
-
-  // 1. Load the 16-byte Stack Key
-  mbedtls_aes_setkey_enc(&aes, this->_stack_key, 128);
-
-  // 2. Build the Initial Vector (IV) for MAC generation
-  bool isOneWay = (finalCtrlByte0 & 0x20) != 0; // Bit 5 = isOneWay
-  uint8_t iv[16];
-
-  size_t cmd_payload_len = 1 + payload.size();
-  uint8_t cmd_payload_buf[32] = {0};
-  cmd_payload_buf[0] = commandId;
-  for (size_t i = 0; i < payload.size(); i++) {
-      cmd_payload_buf[1 + i] = payload[i];
-  }
-
-  // IV[0-7]: First 8 bytes of Cmd+Payload padded with 0x55
-  for(size_t i = 0; i < 8; i++) {
-      if (i < cmd_payload_len) {
-          iv[i] = cmd_payload_buf[i];
-      } else {
-          iv[i] = 0x55;
-      }
-  }
-
-  // IV[8-9]: Checksum over Header + Cmd + Payload
-  size_t checksum_len = 8 + cmd_payload_len;
-  uint8_t c1 = 0, c2 = 0;
-  for (size_t i = 0; i < checksum_len; i++) {
-      uint8_t tmp = frame[i] ^ c2;
-      uint8_t next_c1 = (c1 << 1) & 0xFE;
-      if ((c1 & 0x80) == 0) {
-          if (tmp >= 128) next_c1 |= 1;
-          c1 = next_c1;
-          c2 = (tmp << 1) & 0xFF;
-      } else {
-          if (tmp >= 128) next_c1 |= 1;
-          c1 = next_c1 ^ 0x55;
-          c2 = ((tmp << 1) ^ 0x5B) & 0xFF;
-      }
-  }
-  iv[8] = c1;
-  iv[9] = c2;
-
-  if (isOneWay) {
-      // 1W Mode IV[10-15]: Counter + Padding
-      iv[10] = (uint8_t)((this->_sequence_counter >> 8) & 0xFF);
-      iv[11] = (uint8_t)(this->_sequence_counter & 0xFF);
-      iv[12] = 0x55; iv[13] = 0x55; iv[14] = 0x55; iv[15] = 0x55;
-  } else {
-      // 2W Mode IV[10-15]: Challenge (Requires state management for previous challenge)
-      for (int i = 10; i < 16; i++) iv[i] = 0x00;
-  }
-
+  // --- LAYER 3: AES-128 MAC (Message Authentication Code) ---
   uint8_t output_block[16] = {0};
-  mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, iv, output_block);
+
+  IoHomeFrame_t tempFrame;
+  tempFrame.ctrlByte0 = finalCtrlByte0;
+  tempFrame.commandId = commandId;
+  tempFrame.payload = payload;
+
+  IoHomeCrypto::generateMac(tempFrame, frame.data(), this->_sequence_counter, this->_stack_key, output_block);
 
   // 4. Extract 6 bytes and insert into frame
   for (int i = 0; i < IOHOME_SECURITY_MAC_LEN; i++) {
       frame[offset++] = output_block[i];
   }
-
-  mbedtls_aes_free(&aes);
 
   // CRC
   uint16_t calculatedCrc = IoHomeNode::crc16(frame.data(), messageBodyLen);
@@ -260,206 +179,42 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
 }
 
 bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame) {
-    // Default to invalid and clear payload
-    parsedFrame.isValid = false;
-    parsedFrame.payload.clear();
+    size_t actual_security_mac_len = 0;
+    uint16_t rxCounter = 0;
+    uint8_t rxMac[16] = {0};
 
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::parseFrame] --- Starting parse for frame of length: %u ---\n", (unsigned int)frameLength);
-    // Log raw bytes for debugging
-    Serial.print("[IoHomeNode::parseFrame] Raw bytes: ");
-    for(size_t i=0; i<frameLength; i++) {
-        Serial.printf("%02X ", frame[i]);
-    }
-    Serial.println();
-#endif
-
-    // 1. Basic structural length check (Header + CmdID + Counter + CRC)
-    if (frameLength < (IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + IOHOME_SECURITY_COUNTER_LEN + IOHOME_FRAME_CRC_LEN)) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.printf("[IoHomeNode::parseFrame] Frame too short (len %u) for minimum header+cmd+counter+crc (%u bytes).\n", frameLength, (IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + IOHOME_SECURITY_COUNTER_LEN + IOHOME_FRAME_CRC_LEN));
-#endif
+    if (!IoHomeParser::decodeHeader(frame, frameLength, parsedFrame, actual_security_mac_len, rxCounter, rxMac)) {
         return false;
     }
 
-    // 2. Validate CRC
-    if (!validateFrameCrc(frame, frameLength)) {
-        return false;
-    }
+    // --- KEY TRANSFER (0x30) INTERCEPTION ---
+    uint8_t active_mac_key[16];
+    std::copy(this->_stack_key, this->_stack_key + 16, active_mac_key);
 
-    // 3. Extract Fixed Header
-    size_t offset = 0;
-    parsedFrame.ctrlByte0 = frame[offset++];
-    parsedFrame.ctrlByte1 = frame[offset++];
+    if (parsedFrame.commandId == 0x30 && parsedFrame.payload.size() >= 16) {
+        uint8_t extracted_key[16];
+        IoHomeCrypto::decryptTransferKey(parsedFrame, extracted_key);
 
-  parsedFrame.destMac.n0 = frame[offset++];
-  parsedFrame.destMac.n1 = frame[offset++];
-  parsedFrame.destMac.n2 = frame[offset++];
-
-  parsedFrame.sourceMac.n0 = frame[offset++];
-  parsedFrame.sourceMac.n1 = frame[offset++];
-  parsedFrame.sourceMac.n2 = frame[offset++];
-
-    // 4. Extract Command ID
-    parsedFrame.commandId = frame[offset++];
+        // The 0x30 command's own MAC is calculated using the key that is actively being transferred
+        std::copy(extracted_key, extracted_key + 16, active_mac_key);
 
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::parseFrame] Decoded Header: Ctrl0=0x%02X (Binary: %s), Ctrl1=0x%02X (Binary: %s)\n",
-                  parsedFrame.ctrlByte0, String(parsedFrame.ctrlByte0, BIN).c_str(),
-                  parsedFrame.ctrlByte1, String(parsedFrame.ctrlByte1, BIN).c_str());
-    Serial.printf("[IoHomeNode::parseFrame] Source MAC: %02X%02X%02X, Dest MAC: %02X%02X%02X\n",
-                  parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
-                  parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
-    Serial.printf("[IoHomeNode::parseFrame] Command ID: 0x%02X\n", parsedFrame.commandId);
+        Serial.println("\n=======================================================");
+        Serial.println("[IoHomeNode::parseFrame] !!! 1-WAY KEY TRANSFER (0x30) DETECTED !!!");
+        Serial.print("[IoHomeNode::parseFrame] Decrypted Stack Key : ");
+        for (int i = 0; i < 16; i++) Serial.printf("%02X ", extracted_key[i]);
+        Serial.println("\n=======================================================\n");
 #endif
-
-    // 5. Length Validation from CTRL0
-    // The lower 5 bits of Ctrl0 represent TotalBodyBytes - 1
-    size_t total_body_bytes = (parsedFrame.ctrlByte0 & 0x1F) + 1;
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::parseFrame] Declared total body length from Ctrl0: %u bytes\n", total_body_bytes);
-#endif
-
-    // Determine actual security footer length based on observed frame length and declared payload length
-    size_t actual_security_mac_len = IOHOME_SECURITY_MAC_LEN; // Default to 6
-    size_t actual_security_footer_len = IOHOME_SECURITY_COUNTER_LEN + actual_security_mac_len;
-
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::parseFrame] Assuming security footer length: %u (Counter: %u, MAC: %u)\n",
-                  (unsigned int)actual_security_footer_len, (unsigned int)IOHOME_SECURITY_COUNTER_LEN, (unsigned int)actual_security_mac_len);
-#endif
-
-    size_t expected_total_message_body_len = total_body_bytes;
-    size_t actual_total_message_body_len = frameLength - IOHOME_FRAME_CRC_LEN;
-
-    if (expected_total_message_body_len != actual_total_message_body_len) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.printf("[IoHomeNode::parseFrame] ERROR: Message body length mismatch. Expected %u, but got %u (frameLength %u - CRC %u)\n",
-                      expected_total_message_body_len, actual_total_message_body_len, frameLength, IOHOME_FRAME_CRC_LEN);
-#endif
-        return false;
     }
-
-    // 6. Extract Payload
-    size_t overhead = IOHOME_FRAME_HEADER_LEN + IOHOME_COMMAND_ID_LEN + actual_security_footer_len;
-    if (actual_total_message_body_len < overhead) {
-        return false; // Malformed frame length
-    }
-    size_t actual_payload_len = actual_total_message_body_len - overhead;
-
-    if (actual_payload_len > 0) {
-        parsedFrame.payload.resize(actual_payload_len);
-        std::copy(frame + offset, frame + offset + actual_payload_len, parsedFrame.payload.begin());
-        offset += actual_payload_len;
-    }
-
-    // 7. Extract & Verify Security Footer (Counter + MAC)
-    // Offset is now correctly pointing to the start of the security footer
-    uint16_t rxCounter = (frame[offset] << 8) | frame[offset + 1];
-    offset += 2;
-
-    uint8_t rxMac[IOHOME_SECURITY_MAC_LEN] = {0}; // Use max possible MAC length for buffer
-    // Copy only the actual MAC bytes based on actual_security_mac_len
-    if (actual_security_mac_len > 0) {
-        std::copy(frame + offset, frame + offset + actual_security_mac_len, rxMac);
-    }
-    // Note: No need to increment offset further, we are at the CRC which was already checked.
-
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode::parseFrame] Extracted Security Footer: Counter=0x%04X, MAC (first %u bytes): ", rxCounter, (unsigned int)actual_security_mac_len);
-    for(size_t i=0; i<actual_security_mac_len; i++) {
-        Serial.printf("%02X ", rxMac[i]);
-    }
-    Serial.println();
-#endif
 
     // --- CRYPTOGRAPHIC VERIFICATION ---
-    mbedtls_aes_context aes;
-    mbedtls_aes_init(&aes);
-    mbedtls_aes_setkey_enc(&aes, this->_stack_key, 128);
-
-    // --- IO-HOMECONTROL MAC GENERATION ---
-    bool isOneWay = (parsedFrame.ctrlByte0 & 0x20) != 0; // Bit 5 is OneWay
-
-    uint8_t iv[16];
-    size_t cmd_payload_len = 1 + parsedFrame.payload.size();
-    uint8_t cmd_payload_buf[32] = {0};
-    cmd_payload_buf[0] = parsedFrame.commandId;
-    for(size_t i = 0; i < parsedFrame.payload.size(); i++) {
-        cmd_payload_buf[1 + i] = parsedFrame.payload[i];
-    }
-
-    // IV[0-7]: First 8 bytes of Cmd+Payload padded with 0x55
-    for(size_t i = 0; i < 8; i++) {
-        if (i < cmd_payload_len) {
-            iv[i] = cmd_payload_buf[i];
-        } else {
-            iv[i] = 0x55;
-        }
-    }
-
-    // IV[8-9]: Custom Checksum over Header + Cmd + Payload
-    size_t checksum_len = 8 + cmd_payload_len;
-    uint8_t c1 = 0, c2 = 0;
-    for(size_t i = 0; i < checksum_len; i++) {
-        uint8_t tmp = frame[i] ^ c2;
-        uint8_t next_c1 = (c1 << 1) & 0xFE;
-        if ((c1 & 0x80) == 0) {
-            if (tmp >= 128) next_c1 |= 1;
-            c1 = next_c1;
-            c2 = (tmp << 1) & 0xFF;
-        } else {
-            if (tmp >= 128) next_c1 |= 1;
-            c1 = next_c1 ^ 0x55;
-            c2 = ((tmp << 1) ^ 0x5B) & 0xFF;
-        }
-    }
-    iv[8] = c1;
-    iv[9] = c2;
-
-    if (isOneWay) {
-        // 1W Mode: IV[10-15] is Counter + Padding
-        iv[10] = (uint8_t)(rxCounter >> 8);
-        iv[11] = (uint8_t)(rxCounter & 0xFF);
-        iv[12] = 0x55; iv[13] = 0x55; iv[14] = 0x55; iv[15] = 0x55;
-    } else {
-        // 2W Mode: IV[10-15] is Challenge (Assuming 0x00 placeholder if untracked)
-        for (int i=10; i<16; i++) iv[i] = 0x00;
-    }
-
-    uint8_t expected_block[16] = {0};
-    mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, iv, expected_block);
-
-    bool macMatch = true;
-    // Compare only the number of MAC bytes we actually received
-    for (size_t i = 0; i < actual_security_mac_len; i++) {
-        if (rxMac[i] != expected_block[i]) {
-            macMatch = false;
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-            Serial.printf("[IoHomeNode::parseFrame] ERROR: MAC mismatch at byte %u: Received 0x%02X, Expected 0x%02X\n", i, rxMac[i], expected_block[i]);
-#endif
-            break;
-        }
-    }
-    mbedtls_aes_free(&aes);
+    bool macMatch = IoHomeCrypto::verifyMac(parsedFrame, frame, rxCounter, rxMac, actual_security_mac_len, active_mac_key);
 
     if (!macMatch) {
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
         Serial.println("[IoHomeNode::parseFrame] --- AES Verification Failed Details ---");
         Serial.print("[IoHomeNode::parseFrame] Stack Key    : ");
-        for(int i = 0; i < 16; i++) Serial.printf("%02X ", this->_stack_key[i]);
-        Serial.println();
-
-        Serial.print("[IoHomeNode::parseFrame] AES IV Block : ");
-        for(size_t i = 0; i < 16; i++) Serial.printf("%02X ", iv[i]);
-        Serial.println();
-
-        Serial.print("[IoHomeNode::parseFrame] Expected MAC : ");
-        for(int i = 0; i < 16; i++) Serial.printf("%02X ", expected_block[i]);
-        Serial.println();
-
-        Serial.print("[IoHomeNode::parseFrame] Received MAC : ");
-        for(size_t i = 0; i < actual_security_mac_len; i++) Serial.printf("%02X ", rxMac[i]);
+        for(int i = 0; i < 16; i++) Serial.printf("%02X ", active_mac_key[i]);
         Serial.println("\n[IoHomeNode::parseFrame] -----------------------------------------");
 #endif
         parsedFrame.isValid = false;

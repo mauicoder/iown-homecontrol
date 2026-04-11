@@ -3,8 +3,11 @@
 #include <RadioLib.h>
 #include "IoHome.h" // Include the IoHome library header
 #include <Wire.h>
+#include <mbedtls/aes.h>
 #include <Preferences.h>
 #include <U8g2lib.h>
+#include "IoHomeParser.h"
+#include "IoHomeCrypto.h"
 
 // --- HELTEC V3.2 PIN MAPPING ---
 #define HW_VEXT            36   // Power Rail (Active LOW)
@@ -394,6 +397,24 @@ void loop() {
               Serial.println(F("    >>> AES MAC VERIFICATION FAILED (Or No Keys) <<<"));
           } else {
               Serial.println(F("    >>> AES AUTHENTICATION SUCCESSFUL <<<"));
+          }
+
+          // Automatically save 1-Way Key Transfer to NVRAM
+          if (parsedFrame.commandId == 0x30 && parsedFrame.payload.size() >= 16) {
+              uint8_t extracted_key[16];
+              IoHomeCrypto::decryptTransferKey(parsedFrame, extracted_key);
+
+              Serial.println(F("    >>> NEW 1-WAY KEY DETECTED! SAVING TO NVRAM <<<"));
+              Serial.print(F("    Extracted Key: "));
+              for (int i = 0; i < 16; i++) {
+                  Serial.printf("%02X ", extracted_key[i]);
+              }
+              Serial.println();
+
+              saveConfiguration(parsedFrame.sourceMac, extracted_key);
+
+              // Reload the IoHomeNode with the new keys immediately
+              ioNode.begin(&ioHomeChannel, sourceNodeId, destNodeId, stackKey, systemKey);
           }
 
           // Update OLED
