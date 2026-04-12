@@ -38,8 +38,6 @@ int16_t IoHomeNode::begin(const IoHomeChannel_t* channel,
         std::copy(system_key, system_key + 16, this->_system_key);
     }
 
-    this->_sequence_counter = 0;
-
     // 2. Hardware Safety Check
     if (this->_phyLayer == nullptr || this->_channel == nullptr) {
         return RADIOLIB_ERR_CHIP_NOT_FOUND;
@@ -152,6 +150,10 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   frame[offset++] = (uint8_t)((this->_sequence_counter >> 8) & 0xFF); // High Byte
   frame[offset++] = (uint8_t)(this->_sequence_counter & 0xFF);        // Low Byte
 
+#if defined(ARDUINO) && defined(DEBUG_IOHOME)
+  Serial.printf("[IoHomeNode::buildFrame] Using Sequence Counter: 0x%04X\n", this->_sequence_counter);
+#endif
+
   // --- LAYER 3: AES-128 MAC (Message Authentication Code) ---
   uint8_t output_block[16] = {0};
 
@@ -221,9 +223,39 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
         return false;
     }
 
+    // --- Keep ESP32 Sequence Counter in Sync! ---
+    // To successfully spoof the remote, our sequence counter must be strictly greater
+    // than the last counter the awning received.
+    if (rxCounter >= this->_sequence_counter || this->_sequence_counter == 0) {
+        this->_sequence_counter = rxCounter + 1;
+    }
+
     // Success
     parsedFrame.isValid = true;
     return true;
+}
+
+int16_t IoHomeNode::sendButton(uint16_t buttonAction) {
+    // The physical remote broadcasts the 'MY/STOP' button, but directs 'UP' and 'DOWN' to the paired device.
+    bool useBroadcast = (_destination_node_id.n0 == 0 && _destination_node_id.n1 == 0 && _destination_node_id.n2 == 0) || (buttonAction == IOHOME_ACTION_MY);
+    NodeId targetMac = useBroadcast ? NodeId{0x00, 0x00, 0x3F} : _destination_node_id;
+
+    std::vector<uint8_t> payload;
+    if (buttonAction == IOHOME_ACTION_MY) {
+        // STOP/MY command uses a 6-byte payload without the profile parameter
+        payload = {0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x00, 0x00};
+    } else if (buttonAction == IOHOME_ACTION_UP) {
+        // UP requires the Absolute Parameter (0x80 0xC8)
+        payload = {0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x80, 0xC8, 0x00, 0x00};
+    } else {
+        // DOWN requires the Default Profile Parameter (0x80 0xD3)
+        payload = {0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x80, 0xD3, 0x00, 0x00};
+    }
+
+    // 0xF0 = 1W Mode, Order 0, Length will be auto-calculated by buildFrame
+    std::vector<uint8_t> frame = this->buildFrame(0xF0, 0x00, this->_source_node_id, targetMac, IOHOME_CMD_0x00, payload);
+
+    return this->transmitFrame(frame);
 }
 
 int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
@@ -243,11 +275,62 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
     }
     Serial.println(""); // Use empty string for new line
 #endif
-    // Transmit the frame
-    int16_t state = this->_phyLayer->startTransmit(const_cast<uint8_t*>(frame.data()), frame.size());
+
+    // The physical io-homecontrol protocol requires all data after the Sync Word
+    // to be PN9-whitened before transmission. We must encode our plaintext frame.
+    std::vector<uint8_t> txBuffer = frame;
+    IoHomeNode::deWhiten(txBuffer.data(), txBuffer.size());
+
+    // io-homecontrol is UART-encoded (8N1) over the air.
+    // Since we receive the raw FSK bitstream and software-decode the UART frames in receiveFrame,
+    // we must also manually UART-encode our transmission buffer so the awning can understand it.
+    std::vector<uint8_t> uartBuffer;
+    uint16_t currentTxByte = 0;
+    int txBits = 0;
+
+    auto pushBit = [&](uint8_t bit) {
+        currentTxByte = (currentTxByte << 1) | (bit & 0x01);
+        txBits++;
+        if (txBits == 8) {
+            uartBuffer.push_back((uint8_t)currentTxByte);
+            currentTxByte = 0;
+            txBits = 0;
+        }
+    };
+
+    for (size_t i = 0; i < txBuffer.size(); i++) {
+        uint8_t b = txBuffer[i];
+        pushBit(0); // Start bit
+        for (int j = 0; j < 8; j++) {
+            pushBit((b >> j) & 0x01); // LSB first
+        }
+        pushBit(1); // Stop bit
+    }
+    while (txBits > 0) { pushBit(1); } // Pad final byte with Idle (1)
+
+    // Transmit the frame 6 times across all 3 frequencies to mimic the physical remote
+    // and hit the awning's wake window regardless of which channel it is currently scanning.
+    int16_t state = RADIOLIB_ERR_NONE;
+    SX126x* sx126x_radio = static_cast<SX126x*>(this->_phyLayer);
+    const float freqs[3] = { 868.25f, 868.95f, 869.85f };
+
+    for (int i = 0; i < 6; i++) {
+        if (sx126x_radio) {
+            sx126x_radio->standby();
+            sx126x_radio->setFrequency(freqs[i % 3]);
+        }
+        state = this->_phyLayer->transmit(uartBuffer.data(), uartBuffer.size());
+        if (i < 5) delay(60); // 60ms gap covers the wake window perfectly
+    }
+
+    // Restore original frequency
+    if (sx126x_radio && this->_channel) {
+        sx126x_radio->standby();
+        sx126x_radio->setFrequency(this->_channel->c0 + (this->_channel->c1 / 100.0f));
+    }
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
     if (state == RADIOLIB_ERR_NONE) {
-        Serial.println("[IoHomeNode::transmitFrame] Transmission initiated successfully.");
+        Serial.println("[IoHomeNode::transmitFrame] Transmission sequence completed successfully.");
     } else {
         Serial.printf("[IoHomeNode::transmitFrame] Transmission failed with error: %d\n", state);
     }

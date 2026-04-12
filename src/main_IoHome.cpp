@@ -85,6 +85,10 @@ void loadConfiguration() {
         Serial.println("No NodeID in config. Using defaults.");
     }
 
+    if (preferences.getBytesLength("destNode") == sizeof(NodeId)) {
+        preferences.getBytes("destNode", &destNodeId, sizeof(NodeId));
+    }
+
     if (preferences.getBytesLength("stackKey") == 16) {
         preferences.getBytes("stackKey", stackKey, 16);
         Serial.println("Loaded 16-byte Stack Key from config.");
@@ -92,19 +96,35 @@ void loadConfiguration() {
         Serial.println("No Stack Key in config. Using defaults.");
     }
 
+    if (preferences.getBytesLength("seqCounter") == sizeof(uint16_t)) {
+        uint16_t sc = 0;
+        preferences.getBytes("seqCounter", &sc, sizeof(uint16_t));
+        ioNode.setSequenceCounter(sc);
+        Serial.printf("Loaded Sequence Counter: 0x%04X\n", sc);
+    }
+
     preferences.end();
 }
 
-void saveConfiguration(NodeId newNode, const uint8_t* newKey) {
+void saveConfiguration(NodeId srcNode, NodeId dstNode, const uint8_t* newKey) {
     preferences.begin("iohome", false); // false = read/write mode
-    preferences.putBytes("sourceNode", &newNode, sizeof(NodeId));
+    preferences.putBytes("sourceNode", &srcNode, sizeof(NodeId));
+    preferences.putBytes("destNode", &dstNode, sizeof(NodeId));
     preferences.putBytes("stackKey", newKey, 16);
     preferences.end();
 
     // Update active RAM variables
-    sourceNodeId = newNode;
+    sourceNodeId = srcNode;
+    destNodeId = dstNode;
     memcpy(stackKey, newKey, 16);
     Serial.println("Configuration successfully saved to NVRAM!");
+}
+
+void saveSequenceCounter(uint16_t counter) {
+    preferences.begin("iohome", false);
+    preferences.putBytes("seqCounter", &counter, sizeof(uint16_t));
+    preferences.end();
+    Serial.printf("    >>> SEQUENCE COUNTER SAVED: 0x%04X <<<\n", counter);
 }
 
 // --- PERSISTENT STATE MACHINE PARSER ---
@@ -183,6 +203,12 @@ public:
         if (searchIdx > 0) consume(searchIdx); // Drop evaluated garbage
         if (length > BUFFER_SIZE - 256) consume(length - 64); // Safe fallback
         return false;
+    }
+
+    void clear() {
+        length = 0;
+        frameBit = 0;
+        currentData = 0;
     }
 };
 
@@ -411,10 +437,42 @@ void loop() {
               }
               Serial.println();
 
-              saveConfiguration(parsedFrame.sourceMac, extracted_key);
+              saveConfiguration(parsedFrame.sourceMac, destNodeId, extracted_key);
 
               // Reload the IoHomeNode with the new keys immediately
               ioNode.begin(&ioHomeChannel, sourceNodeId, destNodeId, stackKey, systemKey);
+          }
+
+          // Decode 0x00 Execute Function payloads to see the button presses
+          if (parsedFrame.commandId == 0x00 && isAuth && parsedFrame.payload.size() >= 4) {
+              uint16_t action = (parsedFrame.payload[2] << 8) | parsedFrame.payload[3];
+              Serial.print("    >>> DECODED ACTION: ");
+              if (action == IOHOME_ACTION_UP) Serial.print("UP / OPEN");
+              else if (action == IOHOME_ACTION_DOWN) Serial.print("DOWN / CLOSE");
+              else if (action == IOHOME_ACTION_MY) Serial.print("MY / STOP");
+              else Serial.printf("UNKNOWN (0x%04X)", action);
+
+              if (parsedFrame.payload.size() >= 6) {
+                  uint16_t param = (parsedFrame.payload[4] << 8) | parsedFrame.payload[5];
+                  Serial.printf(" | PARAM: 0x%04X <<<\n", param);
+              } else {
+                  Serial.println(" <<<");
+              }
+          }
+
+          // Automatically learn the targeted Awning's address from authenticated 0x00 commands
+          if (parsedFrame.commandId == 0x00 && isAuth && parsedFrame.destMac.n2 != 0x3F) {
+              if (parsedFrame.destMac.n0 != destNodeId.n0 || parsedFrame.destMac.n1 != destNodeId.n1 || parsedFrame.destMac.n2 != destNodeId.n2) {
+                  Serial.printf("    >>> TARGET DEVICE DETECTED (%02X%02X%02X)! SAVING TO NVRAM <<<\n",
+                                parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+                  saveConfiguration(sourceNodeId, parsedFrame.destMac, stackKey);
+                  ioNode.begin(&ioHomeChannel, sourceNodeId, destNodeId, stackKey, systemKey);
+              }
+          }
+
+          // Automatically sync the Sequence Counter to NVRAM so we don't lose it on reboot
+          if (isAuth) {
+              saveSequenceCounter(ioNode.getSequenceCounter());
           }
 
           // Update OLED
@@ -451,5 +509,47 @@ void loop() {
     // Put the radio back into listening mode
     radio.startReceive();
     lastHopTime = millis(); // Reset hopping timer
+  }
+
+  // --- 3. SERIAL INTERACTION (User Commands) ---
+  if (Serial.available() > 0) {
+      char c = Serial.read();
+      // Flush trailing newlines
+      while(Serial.available() > 0 && (Serial.peek() == '\n' || Serial.peek() == '\r')) Serial.read();
+
+      if (c == 'U' || c == 'u' || c == 'D' || c == 'd' || c == 'S' || c == 's' || c == 'm' || c == 'M') {
+          radio.standby(); // Pause receiving to free up the radio chip
+          int16_t state = RADIOLIB_ERR_NONE;
+
+          if (c == 'U' || c == 'u') {
+              Serial.println("\n>>> USER COMMAND: SENDING 'UP' <<<");
+              state = ioNode.sendButton(IOHOME_ACTION_UP);
+          } else if (c == 'D' || c == 'd') {
+              Serial.println("\n>>> USER COMMAND: SENDING 'DOWN' <<<");
+              state = ioNode.sendButton(IOHOME_ACTION_DOWN);
+          } else {
+              Serial.println("\n>>> USER COMMAND: SENDING 'MY/STOP' <<<");
+              state = ioNode.sendButton(IOHOME_ACTION_MY);
+          }
+
+          if (state == RADIOLIB_ERR_NONE) Serial.println("    >>> TRANSMISSION SUCCESSFUL <<<");
+          else Serial.printf("    >>> TRANSMISSION FAILED (Code: %d) <<<\n", state);
+
+          // Save the incremented counter after we transmit
+          saveSequenceCounter(ioNode.getSequenceCounter());
+
+          radio.startReceive(); // Resume listening mode
+
+          // --- CRITICAL FIX FOR THE "GHOST PACKET" ---
+          // The radio.transmit() function triggers the DIO1 interrupt when TxDone occurs.
+          // This sets receivedFlag to true. We MUST clear it here, otherwise the main loop will
+          // immediately read the dirty SX1262 FIFO and repeatedly parse the old 0x0EF4 packet.
+          receivedFlag = false;
+
+          // Flush the software buffer to completely eliminate ghost packets
+          streamParser.clear();
+
+          lastHopTime = millis();
+      }
   }
 }

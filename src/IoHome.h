@@ -62,6 +62,11 @@
 #define IOHOME_SECURITY_MAC_LEN             (6)
 #define IOHOME_SECURITY_FOOTER_LEN          (IOHOME_SECURITY_COUNTER_LEN + IOHOME_SECURITY_MAC_LEN) // 8 bytes
 
+// Button Actions for Command 0x00
+#define IOHOME_ACTION_UP                    (0x0000)
+#define IOHOME_ACTION_DOWN                  (0xC800)
+#define IOHOME_ACTION_MY                    (0xD200)
+
 // Buffer lengths
 #define IOHOME_FIXED_PAYLOAD_LEN            (64)
 #define IOHOME_MAX_FIFO_LEN                 (256)
@@ -151,7 +156,11 @@ class IoHomeNode {
     static void deWhiten(uint8_t* data, size_t length);
 
     // Commands
+    uint16_t getSequenceCounter() const { return _sequence_counter; }
+    void setSequenceCounter(uint16_t counter) { _sequence_counter = counter; }
+
     int16_t sendWink(NodeId targetMac);
+    int16_t sendButton(uint16_t buttonAction);
 
     // Template helpers (Must be in header)
     template<typename T>

@@ -8,9 +8,11 @@
 #endif
 
 bool IoHomeCrypto::decryptTransferKey(const IoHomeFrame_t& parsedFrame, uint8_t* outKey) {
+    if (parsedFrame.payload.size() < 16) return false;
+
     uint8_t transfer_iv[16];
     // The IV is the Source MAC repeated to fill 16 bytes.
-    // It must use the exact Over-The-Air byte order (n0, n1, n2).
+    // Source MAC bytes are kept in the exact order they appeared in the packet (n0, n1, n2).
     uint8_t mac_bytes[3] = { parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2 };
     for (int i = 0; i < 16; i++) {
         transfer_iv[i] = mac_bytes[i % 3];
@@ -21,11 +23,12 @@ bool IoHomeCrypto::decryptTransferKey(const IoHomeFrame_t& parsedFrame, uint8_t*
     // Global io-homecontrol Transfer Key
     const uint8_t transfer_key[16] = {0x34, 0xC3, 0x46, 0x6E, 0xD8, 0x8F, 0x4E, 0x8E, 0x16, 0xAA, 0x47, 0x39, 0x49, 0x88, 0x43, 0x73};
     mbedtls_aes_setkey_enc(&aes_transfer, transfer_key, 128);
+
     uint8_t encrypted_iv[16];
     mbedtls_aes_crypt_ecb(&aes_transfer, MBEDTLS_AES_ENCRYPT, transfer_iv, encrypted_iv);
     mbedtls_aes_free(&aes_transfer);
 
-    // Extract the true Stack Key by XORing the encrypted payload with the AES-encrypted IV.
+    // Extract the true Stack Key by XORing the encrypted payload with the AES-encrypted IV
     for (int i = 0; i < 16; i++) {
         outKey[i] = parsedFrame.payload[i] ^ encrypted_iv[i];
     }
