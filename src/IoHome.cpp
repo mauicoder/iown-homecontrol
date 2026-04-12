@@ -6,6 +6,7 @@
 #include <stdexcept>
 #include "TypeDef.h"
 #include "protocols/PhysicalLayer/PhysicalLayer.h"
+#include "hal/BoardHAL.h"
 // Mock Serial object and PhysicalLayer base class definitions
 // were moved to tests/test_IoHome.cpp to ensure vtable is emitted in the correct compilation unit for the test build.
 
@@ -311,22 +312,21 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
     // Transmit the frame 6 times across all 3 frequencies to mimic the physical remote
     // and hit the awning's wake window regardless of which channel it is currently scanning.
     int16_t state = RADIOLIB_ERR_NONE;
-    SX126x* sx126x_radio = static_cast<SX126x*>(this->_phyLayer);
     const float freqs[3] = { 868.25f, 868.95f, 869.85f };
 
     for (int i = 0; i < 6; i++) {
-        if (sx126x_radio) {
-            sx126x_radio->standby();
-            sx126x_radio->setFrequency(freqs[i % 3]);
+        if (this->_phyLayer) {
+            this->_phyLayer->standby();
+            this->_phyLayer->setFrequency(freqs[i % 3]);
         }
         state = this->_phyLayer->transmit(uartBuffer.data(), uartBuffer.size());
         if (i < 5) delay(60); // 60ms gap covers the wake window perfectly
     }
 
     // Restore original frequency
-    if (sx126x_radio && this->_channel) {
-        sx126x_radio->standby();
-        sx126x_radio->setFrequency(this->_channel->c0 + (this->_channel->c1 / 100.0f));
+    if (this->_phyLayer && this->_channel) {
+        this->_phyLayer->standby();
+        this->_phyLayer->setFrequency(this->_channel->c0 + (this->_channel->c1 / 100.0f));
     }
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
     if (state == RADIOLIB_ERR_NONE) {
@@ -347,26 +347,20 @@ int16_t IoHomeNode::receiveFrame(IoHomeFrame_t& receivedFrame) {
     }
 
     // Ghost Packet Detection:
-    // The PhysicalLayer abstraction doesn't expose getRSSI(false), so we must
-    // downcast to the specific SX126x implementation to access it.
-    // NOTE: We use static_cast because RTTI (and thus dynamic_cast) is disabled
-    // in the Arduino environment for performance reasons. This is safe as long
-    // as we guarantee that the PhysicalLayer object passed to the IoHomeNode
-    // constructor is an instance of SX126x or one of its derived classes.
-    SX126x* sx126x_radio = static_cast<SX126x*>(this->_phyLayer);
-    if (sx126x_radio) {
-        float instantaneousRssi = sx126x_radio->getRSSI(false); // 'false' for instantaneous
-        if (instantaneousRssi < -100.0) {
+    // The generic PhysicalLayer abstraction doesn't expose an instantaneous RSSI read
+    // without reading the packet. We use the BoardHAL to bypass this limitation.
+    float instantaneousRssi = BoardHAL::getInstantaneousRSSI();
+
+    if (instantaneousRssi < -100.0) {
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
             Serial.printf("[IoHomeNode::receiveFrame] Discarding ghost packet (RSSI: %.2f dBm, Len: %u)\n", instantaneousRssi, packetLength);
 #endif
             // Forcefully reset the radio's state to clear the FIFO and any stuck IRQ flags.
             // This is more robust than just calling startReceive().
             this->_phyLayer->standby();
-            this->_phyLayer->startReceive();
+            BoardHAL::startReceive();
             return RADIOLIB_ERR_RX_TIMEOUT;
         }
-    }
 
     // 2. Read the data
     std::vector<uint8_t> rxBuffer(packetLength);
@@ -374,7 +368,7 @@ int16_t IoHomeNode::receiveFrame(IoHomeFrame_t& receivedFrame) {
     if (readState != RADIOLIB_ERR_NONE) {
         // If read fails, something is very wrong. Reset and get out.
         this->_phyLayer->standby();
-        this->_phyLayer->startReceive();
+        BoardHAL::startReceive();
         return readState;
     }
 
@@ -392,13 +386,13 @@ int16_t IoHomeNode::receiveFrame(IoHomeFrame_t& receivedFrame) {
         Serial.println("[IoHomeNode::receiveFrame] Packet failed validation (CRC/Parse). Force-resetting radio state.");
 #endif
         this->_phyLayer->standby();
-        this->_phyLayer->startReceive();
+        BoardHAL::startReceive();
         return RADIOLIB_ERR_CRC_MISMATCH;
     }
 
     // 6. SUCCESS! The packet was valid.
     // Now we can safely restart the receiver for the next packet.
-    this->_phyLayer->startReceive();
+    BoardHAL::startReceive();
     return RADIOLIB_ERR_NONE; // Success!
 }
 

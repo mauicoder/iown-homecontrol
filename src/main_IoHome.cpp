@@ -8,28 +8,8 @@
 #include <U8g2lib.h>
 #include "IoHomeParser.h"
 #include "IoHomeCrypto.h"
-
-// --- HELTEC V3.2 PIN MAPPING ---
-#define HW_VEXT            36   // Power Rail (Active LOW)
-#define HW_LED             35   // System LED
-#define LORA_NSS           8    // Chip Select
-#define LORA_DIO1          14   // Interrupt
-#define LORA_NRST          12   // Reset
-#define LORA_BUSY          13   // Busy Pin
-#define LORA_SCK           9
-#define LORA_MISO          11
-#define LORA_MOSI          10
-
-// --- OLED PIN MAPPING ---
-#define OLED_SDA           17
-#define OLED_SCL           18
-#define OLED_RST           21
-
-// --- OLED OBJECT ---
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, OLED_RST, OLED_SCL, OLED_SDA);
-
-// --- RADIO OBJECT ---
-SX1262 radio = new Module(LORA_NSS, LORA_DIO1, LORA_NRST, LORA_BUSY);
+#include "IoHomeWebSniffer.h"
+#include "hal/BoardHAL.h" // Include the hardware abstraction layer for board-specific configurations
 
 // --- INTERRUPT HANDLING ---
 // Flag to indicate that a packet was received.
@@ -72,7 +52,8 @@ NodeId sourceNodeId = {0x00, 0x00, 0x00};
 NodeId destNodeId = {0x00, 0x00, 0x00};
 uint8_t stackKey[16] = {0};
 uint8_t systemKey[16] = {0};
-IoHomeNode ioNode(&radio, &ioHomeChannel);
+IoHomeNode ioNode(BoardHAL::radio, &ioHomeChannel);
+IoHomeWebSniffer webSniffer;
 
 // --- CONFIGURATION MANAGEMENT ---
 void loadConfiguration() {
@@ -215,20 +196,16 @@ public:
 IoHomeStreamParser streamParser;
 
 void setup() {
-  // 1. MANDATORY POWER SEQUENCE (The "Yellow Arrow" Fix)
-  pinMode(HW_VEXT, OUTPUT);
-  digitalWrite(HW_VEXT, LOW); // Pull LOW to power the SX1262
+  // 1. HARDWARE INIT
+  BoardHAL::initPower();
 
-  pinMode(HW_LED, OUTPUT);
-  digitalWrite(HW_LED, LOW);
-
-  // Initialize OLED (Needs HW_VEXT to be LOW first, which we just did!)
-  u8g2.begin();
-  u8g2.setFont(u8g2_font_6x10_tr);
-  u8g2.clearBuffer();
-  u8g2.drawStr(0, 15, "Heltec V3.2 IoHome");
-  u8g2.drawStr(0, 30, "Booting...");
-  u8g2.sendBuffer();
+  // 2. DISPLAY INIT
+  BoardHAL::display.begin();
+  BoardHAL::display.setFont(u8g2_font_6x10_tr);
+  BoardHAL::display.clearBuffer();
+  BoardHAL::display.drawStr(0, 15, BoardHAL::getBoardName());
+  BoardHAL::display.drawStr(0, 30, "Booting...");
+  BoardHAL::display.sendBuffer();
 
   // Initialize Serial and wait for connection
   Serial.begin(115200);
@@ -238,68 +215,19 @@ void setup() {
   Serial.println(F("   HELTEC V3.2 IoHome NODE     "));
   Serial.println(F("==============================="));
 
-  // --- LOAD CONFIGURATION FROM NVRAM ---
   loadConfiguration();
+  webSniffer.begin();
 
-  // =========================================================================
-
-  // 2. MANUAL RESET (Ensures Silicon is fresh)
-  pinMode(LORA_NRST, OUTPUT);
-  digitalWrite(LORA_NRST, LOW);
-  delay(50);
-  digitalWrite(LORA_NRST, HIGH);
-  delay(200);
-
-  // 3. SPI INITIALIZATION
-  // NSS pin is managed by RadioLib, so it should not be passed to SPI.begin()
-  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI);
-
-  // 4. RADIOLIB STARTUP
+  // 3. RADIOLIB STARTUP
   Serial.print(F("Initializing Radio... "));
-  // FSK Params: Freq, Bitrate, Dev, RX BW
+  uint8_t syncWord[] = { (uint8_t)(IOHOME_HW_SYNC_WORD >> 16), (uint8_t)(IOHOME_HW_SYNC_WORD >> 8), (uint8_t)IOHOME_HW_SYNC_WORD };
+  bool radioSuccess = BoardHAL::initRadioProtocol(targetFreq, IOHOME_BITRATE, IOHOME_FREQ_DEV, IOHOME_RX_BW, IOHOME_PREAMBLE_LEN, IOHOME_FIXED_PAYLOAD_LEN, syncWord, IOHOME_HW_SYNC_WORD_LEN, setFlag);
 
-  int state = radio.beginFSK(targetFreq, IOHOME_BITRATE, IOHOME_FREQ_DEV, IOHOME_RX_BW);
-
-  if (state == RADIOLIB_ERR_NONE) {
+  if (radioSuccess) {
     Serial.println(F("SUCCESS"));
 
-    // --- CRITICAL V3.2 TUNING ---
-    radio.setDio2AsRfSwitch(true); // LINK PHYSICAL ANTENNA
-    radio.setTCXO(1.6);            // V3.2 uses 32MHz TCXO
-    radio.setRegulatorLDO();       // Quieter noise floor for RSSI
-    radio.calibrateImage(targetFreq);
-
-    // --- CONFIGURE IOHOME PACKET PARAMETERS ---
-    Serial.print(F("Setting packet parameters... "));
-    state = radio.setPreambleLength(IOHOME_PREAMBLE_LEN);
-    if (state == RADIOLIB_ERR_NONE) {
-      state = radio.setCRC(0); // Hardware CRC Off
-    }
-    if (state == RADIOLIB_ERR_NONE) {
-      // Must use Fixed length because the length byte is PN9 whitened!
-      state = radio.fixedPacketLengthMode(IOHOME_FIXED_PAYLOAD_LEN);
-    }
-    if (state == RADIOLIB_ERR_NONE) {
-      Serial.println(F("SUCCESS"));
-    } else {
-      Serial.printf("FAILED, code %d\n", state);
-    }
-
-    // Set the actual sync word bytes
-    Serial.print(F("Setting sync word... "));
-    uint8_t syncWord[] = { (uint8_t)(IOHOME_HW_SYNC_WORD >> 16), (uint8_t)(IOHOME_HW_SYNC_WORD >> 8), (uint8_t)IOHOME_HW_SYNC_WORD };
-    state = radio.setSyncWord(syncWord, IOHOME_HW_SYNC_WORD_LEN);
-    if (state == RADIOLIB_ERR_NONE) {
-      Serial.printf("SUCCESS (0x%06X)\n", IOHOME_HW_SYNC_WORD);
-    } else {
-      Serial.printf("FAILED, code %d\n", state); // This is a critical failure
-    }
-
-    // Set the function to be called upon successful reception (interrupt)
-    radio.setDio1Action(setFlag);
-
-    // 5. START RECEIVING
-    int startReceiveState = radio.startReceive();
+    // 4. START RECEIVING
+    int startReceiveState = BoardHAL::startReceive();
     if (startReceiveState != RADIOLIB_ERR_NONE) {
       Serial.printf("Failed to start receive, code %d\n", startReceiveState);
       while (true); // Halt execution on critical error in setup
@@ -308,7 +236,7 @@ void setup() {
 
     // 6. INITIALIZE IOHOME LIBRARY
     Serial.print(F("Initializing IoHomeNode... "));
-    state = ioNode.begin(&ioHomeChannel, sourceNodeId, destNodeId, stackKey, systemKey);
+    int state = ioNode.begin(&ioHomeChannel, sourceNodeId, destNodeId, stackKey, systemKey);
     if (state == RADIOLIB_ERR_NONE) {
         Serial.println(F("SUCCESS"));
     } else {
@@ -316,33 +244,36 @@ void setup() {
     }
 
     // Display Ready State
-    u8g2.clearBuffer();
-    u8g2.drawStr(0, 15, "Heltec V3.2 IoHome");
-    u8g2.drawStr(0, 30, "Radio: LISTENING");
-    u8g2.sendBuffer();
+    BoardHAL::display.clearBuffer();
+    BoardHAL::display.drawStr(0, 15, BoardHAL::getBoardName());
+    BoardHAL::display.drawStr(0, 30, "Radio: LISTENING");
+    BoardHAL::display.sendBuffer();
 
   } else {
-    Serial.printf("FAILED (Error: %d)\n", state);
-    u8g2.clearBuffer();
-    u8g2.drawStr(0, 15, "RADIO INIT FAILED!");
-    u8g2.sendBuffer();
+    Serial.println(F("RADIO INIT FAILED"));
+    BoardHAL::display.clearBuffer();
+    BoardHAL::display.drawStr(0, 15, "RADIO INIT FAILED!");
+    BoardHAL::display.sendBuffer();
     while(1);
   }
 }
 
 void loop() {
+  // Handle Web Server Clients
+  webSniffer.loop();
+
   // --- 0. CHANNEL HOPPING ---
   if (!receivedFlag && (millis() - lastHopTime >= HOP_INTERVAL_MS)) {
-    float rssi = radio.getRSSI(false); // Check instantaneous RSSI
+    float rssi = BoardHAL::getInstantaneousRSSI();
 
     if (rssi < RSSI_HOP_THRESHOLD) {
       // Channel is quiet (below noise floor), hop to the next frequency
       currentFreqIndex = (currentFreqIndex + 1) % 3;
       targetFreq = IOHOME_FREQUENCIES[currentFreqIndex];
 
-      radio.standby();
-      radio.setFrequency(targetFreq);
-      radio.startReceive();
+      BoardHAL::radio->standby();
+      BoardHAL::radio->setFrequency(targetFreq);
+      BoardHAL::startReceive();
       lastHopTime = millis();
     } else {
       // Signal detected! Pause hopping for 20ms to allow the packet to arrive
@@ -355,7 +286,7 @@ void loop() {
     lastRssiUpdate = millis();
 
     // Get instantaneous RSSI to verify the antenna is "live"
-    float currentRssi = radio.getRSSI(false); // Use 'false' for instantaneous RSSI
+    float currentRssi = BoardHAL::getInstantaneousRSSI();
 
     Serial.print(F("Freq: "));
     Serial.print(targetFreq);
@@ -366,31 +297,32 @@ void loop() {
 
     if (currentRssi > -1.0) {
       Serial.println(F("STATUS: BLINDED (Hardware/Antenna Issue)"));
-      digitalWrite(HW_LED, HIGH); // Constant LED means hardware fail
+      BoardHAL::setLed(true); // Constant LED means hardware fail
     } else {
       Serial.println(F("STATUS: OK"));
       // Short pulse to show life
-      digitalWrite(HW_LED, HIGH); delay(10); digitalWrite(HW_LED, LOW);
+      BoardHAL::setLed(true); delay(10); BoardHAL::setLed(false);
     }
   }
 
   // --- 2. IOHOME PACKET HANDLING ---
+
   // Check if the interrupt flag has been set by the ISR
   if (receivedFlag) {
     // Reset the flag
     receivedFlag = false;
 
     // A packet was received, read it
-    int len = radio.getPacketLength();
+    size_t len = 0;
     byte byteArr[IOHOME_MAX_FIFO_LEN] = {0};
-    int state = radio.readData(byteArr, len);
+    int state = BoardHAL::readData(byteArr, len);
 
     if (state == RADIOLIB_ERR_NONE) {
       // Packet was read successfully
       Serial.print(F("[RAW] Received packet! RSSI: "));
-      Serial.print(radio.getRSSI());
+      Serial.print(BoardHAL::radio->getRSSI());
       Serial.print(F(" | Length: "));
-      Serial.println(len);
+      Serial.println((int)len);
 
       // Print the raw data as hex
       Serial.print(F("      Data: "));
@@ -402,6 +334,9 @@ void loop() {
         Serial.print(F(" "));
       }
       Serial.println();
+
+      // Log raw bytes to the web sniffer
+      webSniffer.appendRawPacket(targetFreq, BoardHAL::radio->getRSSI(), len, byteArr);
 
       // --- 1. CONTINUOUS STATE MACHINE DECODING ---
       // Feed raw bits into the state machine
@@ -424,6 +359,8 @@ void loop() {
           } else {
               Serial.println(F("    >>> AES AUTHENTICATION SUCCESSFUL <<<"));
           }
+
+          webSniffer.appendDecodedPacket(validPacketCount, parsedFrame, isAuth);
 
           // Automatically save 1-Way Key Transfer to NVRAM
           if (parsedFrame.commandId == 0x30 && parsedFrame.payload.size() >= 16) {
@@ -486,14 +423,14 @@ void loop() {
                    parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2,
                    parsedFrame.commandId);
 
-          u8g2.clearBuffer();
+          BoardHAL::display.clearBuffer();
           char headerBuf[32];
           snprintf(headerBuf, 32, "Valid Rx: %lu", validPacketCount);
-          u8g2.drawStr(0, 12, headerBuf);
+          BoardHAL::display.drawStr(0, 12, headerBuf);
           for (int h = 0; h < historyCount; h++) {
-              u8g2.drawStr(0, 28 + (h * 15), packetHistory[h]);
+              BoardHAL::display.drawStr(0, 28 + (h * 15), packetHistory[h]);
           }
-          u8g2.sendBuffer();
+          BoardHAL::display.sendBuffer();
       }
 
     } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
@@ -507,7 +444,8 @@ void loop() {
     }
 
     // Put the radio back into listening mode
-    radio.startReceive();
+    BoardHAL::radio->standby(); // Flush SX1276 FIFO to clear stuck DIO0 interrupts
+    BoardHAL::startReceive();
     lastHopTime = millis(); // Reset hopping timer
   }
 
@@ -518,7 +456,7 @@ void loop() {
       while(Serial.available() > 0 && (Serial.peek() == '\n' || Serial.peek() == '\r')) Serial.read();
 
       if (c == 'U' || c == 'u' || c == 'D' || c == 'd' || c == 'S' || c == 's' || c == 'm' || c == 'M') {
-          radio.standby(); // Pause receiving to free up the radio chip
+          BoardHAL::radio->standby(); // Pause receiving to free up the radio chip
           int16_t state = RADIOLIB_ERR_NONE;
 
           if (c == 'U' || c == 'u') {
@@ -538,7 +476,7 @@ void loop() {
           // Save the incremented counter after we transmit
           saveSequenceCounter(ioNode.getSequenceCounter());
 
-          radio.startReceive(); // Resume listening mode
+          BoardHAL::startReceive(); // Resume listening mode
 
           // --- CRITICAL FIX FOR THE "GHOST PACKET" ---
           // The radio.transmit() function triggers the DIO1 interrupt when TxDone occurs.
