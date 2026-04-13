@@ -83,14 +83,8 @@ namespace BoardHAL {
         lastPacketRssi = sx1276.getRSSI(false, true);
 
         size_t packetLen = sx1276.getPacketLength();
-        // The SX1276 strips the physical sync word (0x57FD99).
-        // We restore these raw physical bits at the beginning of the buffer
-        // so the software UART stream parser can successfully decode them into 0xFF 0x33.
-        data[0] = 0x57;
-        data[1] = 0xFD;
-        data[2] = 0x99;
-        int16_t state = sx1276.readData(data + 3, packetLen);
-        len = packetLen + 3;
+        int16_t state = sx1276.readData(data, packetLen);
+        len = packetLen;
 
         isReceiving = false; // RadioLib automatically transitions to Standby after readData
         return state;

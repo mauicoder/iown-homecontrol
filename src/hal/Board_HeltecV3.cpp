@@ -67,8 +67,10 @@ namespace BoardHAL {
     int16_t startReceive() { return sx1262.startReceive(); }
 
     int16_t readData(uint8_t* data, size_t& len) {
-        len = sx1262.getPacketLength();
-        return sx1262.readData(data, len);
+        size_t packetLen = sx1262.getPacketLength();
+        int16_t state = sx1262.readData(data, packetLen);
+        len = packetLen;
+        return state;
     }
 
     float getInstantaneousRSSI() { return sx1262.getRSSI(false); }
