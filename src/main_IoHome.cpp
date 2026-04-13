@@ -194,6 +194,8 @@ public:
 
 IoHomeStreamParser streamParser;
 
+extern volatile char webCommandTarget; // Hook into the Web Sniffer commands
+
 void setup() {
   // 1. HARDWARE INIT
   BoardHAL::initPower();
@@ -449,10 +451,16 @@ void loop() {
   }
 
   // --- 3. SERIAL INTERACTION (User Commands) ---
-  if (Serial.available() > 0) {
-      char c = Serial.read();
-      // Flush trailing newlines
-      while(Serial.available() > 0 && (Serial.peek() == '\n' || Serial.peek() == '\r')) Serial.read();
+  if (Serial.available() > 0 || webCommandTarget != 0) {
+      char c;
+      if (webCommandTarget != 0) {
+          c = webCommandTarget;
+          webCommandTarget = 0; // Clear the flag after reading
+      } else {
+          c = Serial.read();
+          // Flush trailing newlines
+          while(Serial.available() > 0 && (Serial.peek() == '\n' || Serial.peek() == '\r')) Serial.read();
+      }
 
       if (c == 'U' || c == 'u' || c == 'D' || c == 'd' || c == 'S' || c == 's' || c == 'm' || c == 'M') {
           BoardHAL::radio->standby(); // Pause receiving to free up the radio chip

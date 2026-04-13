@@ -237,26 +237,32 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
 }
 
 int16_t IoHomeNode::sendButton(uint16_t buttonAction) {
-    // The physical remote broadcasts the 'MY/STOP' button, but directs 'UP' and 'DOWN' to the paired device.
-    bool useBroadcast = (_destination_node_id.n0 == 0 && _destination_node_id.n1 == 0 && _destination_node_id.n2 == 0) || (buttonAction == IOHOME_ACTION_MY);
-    NodeId targetMac = useBroadcast ? NodeId{0x00, 0x00, 0x3F} : _destination_node_id;
+    int16_t state = RADIOLIB_ERR_NONE;
+    bool useBroadcast = (_destination_node_id.n0 == 0 && _destination_node_id.n1 == 0 && _destination_node_id.n2 == 0);
 
-    std::vector<uint8_t> payload;
-    if (buttonAction == IOHOME_ACTION_MY) {
-        // STOP/MY command uses a 6-byte payload without the profile parameter
-        payload = {0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x00, 0x00};
-    } else if (buttonAction == IOHOME_ACTION_UP) {
-        // UP requires the Absolute Parameter (0x80 0xC8)
-        payload = {0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x80, 0xC8, 0x00, 0x00};
-    } else {
-        // DOWN requires the Default Profile Parameter (0x80 0xD3)
-        payload = {0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x80, 0xD3, 0x00, 0x00};
+    // 1. WAKE-UP / BROADCAST FRAME
+    // Multi-channel remotes (like Situo 5) always start a sequence with a generic 6-byte broadcast.
+    // This wakes up sleeping awnings and informs smart hubs (like TaHoma) of the action.
+    NodeId broadcastMac = {0x00, 0x00, 0x3F};
+    std::vector<uint8_t> broadcastPayload = { 0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x00, 0x00 };
+    std::vector<uint8_t> broadcastFrame = this->buildFrame(0xF0, 0x00, this->_source_node_id, broadcastMac, IOHOME_CMD_0x00, broadcastPayload);
+    state = this->transmitFrame(broadcastFrame);
+
+    // 2. TARGETED EXECUTION FRAME
+    // After waking up the network, the remote sends the actual targeted execution command
+    // directly to the paired awning using the 8-byte Absolute Parameter (0x80 0xC8).
+    if (!useBroadcast) {
+        std::vector<uint8_t> targetedPayload;
+        if (buttonAction == IOHOME_ACTION_MY) {
+            targetedPayload = {0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x00, 0x00};
+        } else {
+            targetedPayload = {0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x80, 0xC8, 0x00, 0x00};
+        }
+        std::vector<uint8_t> targetedFrame = this->buildFrame(0xF0, 0x00, this->_source_node_id, this->_destination_node_id, IOHOME_CMD_0x00, targetedPayload);
+        state = this->transmitFrame(targetedFrame);
     }
 
-    // 0xF0 = 1W Mode, Order 0, Length will be auto-calculated by buildFrame
-    std::vector<uint8_t> frame = this->buildFrame(0xF0, 0x00, this->_source_node_id, targetMac, IOHOME_CMD_0x00, payload);
-
-    return this->transmitFrame(frame);
+    return state;
 }
 
 int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
