@@ -25,6 +25,8 @@ namespace BoardHAL {
     static Module* mod = new Module(LORA_NSS, LORA_DIO0, LORA_NRST, LORA_BUSY);
     static SX1276 sx1276 = mod;
     PhysicalLayer* radio = &sx1276; // Upcast to generic radio layer
+    static float lastPacketRssi = -127.0f;
+    static bool isReceiving = false;
 
     void initPower() {
         pinMode(HW_LED, OUTPUT);
@@ -40,9 +42,9 @@ namespace BoardHAL {
 
         int16_t state;
 
-        // Widen RX Bandwidth to 250.0 kHz to compensate for LilyGo's extreme crystal drift
-        // and the wide deviation of the io-homecontrol FSK signal.
-        float widenedRxBw = 250.0;
+        // Use 125.0 kHz to allow for crystal drift, but narrow enough to prevent
+        // strong adjacent-channel signals (-30 dBm) from bleeding over and halting the hopper.
+        float widenedRxBw = 125.0;
         state = sx1276.beginFSK(targetFreq, bitrate, freqDev, widenedRxBw);
         if (state != RADIOLIB_ERR_NONE) { Serial.printf("beginFSK failed: %d\n", state); return false; }
 
@@ -65,23 +67,21 @@ namespace BoardHAL {
     }
 
     int16_t startReceive() {
-        // 1. Let RadioLib configure its internal state machine first
+        // Rely safely on RadioLib's tested internal state machine.
+        // This implicitly uses standard Preamble Detection, AFC, and strict Sync Word validation,
+        // eliminating false positives and maintaining state consistency.
         int16_t state = sx1276.startReceive();
-
-        // 2. Apply our protocol-specific patches AFTER so they aren't overwritten
-        mod->SPIsetRegValue(0x1F, 0x00); // Disable Preamble Detector
-        mod->SPIsetRegValue(0x29, 0xB4); // Set RSSI Threshold to -90 dBm
-
-        // RegRxConfig (0x0D): AfcAutoOn = 0 (CRITICAL), AgcAutoOn = 1, RxTrigger = 001 (RSSI) -> Binary 0000 1001 = 0x09
-        // AFC must be OFF because the unbalanced 0xFF preamble actively detunes the hardware.
-        mod->SPIsetRegValue(0x0D, 0x09);
-
-        uint8_t syncConfig = mod->SPIgetRegValue(0x27);
-        mod->SPIsetRegValue(0x27, syncConfig & 0x7F); // Disable AutoRxRestartOn
+        if (state == RADIOLIB_ERR_NONE) {
+            isReceiving = true;
+        }
         return state;
     }
 
     int16_t readData(uint8_t* data, size_t& len) {
+        // Read RSSI safely via RadioLib API *before* readData puts the chip in Standby.
+        // skipReceive = true prevents RadioLib from accidentally forcing a state change.
+        lastPacketRssi = sx1276.getRSSI(false, true);
+
         size_t packetLen = sx1276.getPacketLength();
         // The SX1276 strips the physical sync word (0x57FD99).
         // We restore these raw physical bits at the beginning of the buffer
@@ -91,10 +91,18 @@ namespace BoardHAL {
         data[2] = 0x99;
         int16_t state = sx1276.readData(data + 3, packetLen);
         len = packetLen + 3;
+
+        isReceiving = false; // RadioLib automatically transitions to Standby after readData
         return state;
     }
 
-    float getInstantaneousRSSI() { return sx1276.getRSSI(false, false); }
+    float getInstantaneousRSSI() {
+        if (isReceiving) {
+            // Live reading for Clear Channel Assessment (LBT)
+            return sx1276.getRSSI(false, true);
+        }
+        return lastPacketRssi;
+    }
     void setLed(bool state) { digitalWrite(HW_LED, state ? HIGH : LOW); }
 }
 #endif
