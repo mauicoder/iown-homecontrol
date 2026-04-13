@@ -83,8 +83,28 @@ namespace BoardHAL {
         lastPacketRssi = sx1276.getRSSI(false, true);
 
         size_t packetLen = sx1276.getPacketLength();
-        int16_t state = sx1276.readData(data, packetLen);
-        len = packetLen;
+
+        // 1. Force the software UART decoder to IDLE by prepending 2 bytes of 0xFF (all 1s).
+        // This guarantees the decoder's bit-alignment state machine is fully reset
+        // before encountering the first real Start Bit of the MAC header.
+        data[0] = 0xFF;
+        data[1] = 0xFF;
+
+        int16_t state = sx1276.readData(data + 2, packetLen);
+
+        // 2. Pad the remainder of the 255-byte buffer with 0x55 (Noise).
+        // The software UART decoder requires Start Bits (0s) to generate decoded output.
+        // 0x55 (01010101) forces the decoder to generate garbage bytes, successfully inflating
+        // the rolling buffer past the parser's 60-byte minimum sliding window threshold.
+        size_t totalLen = packetLen + 2;
+        if (totalLen < 255) {
+            for (size_t i = totalLen; i < 255; i++) {
+                data[i] = 0x55;
+            }
+            len = 255;
+        } else {
+            len = totalLen;
+        }
 
         isReceiving = false; // RadioLib automatically transitions to Standby after readData
         return state;

@@ -157,24 +157,23 @@ public:
         size_t searchIdx = 0;
         Serial.printf(">>> Searching rolling buffer (Current length: %zu bytes)\n", length);
 
-        while (searchIdx + 2 + IOHOME_MIN_FRAME_LEN <= length) {
-            if (buffer[searchIdx] == 0xFF && buffer[searchIdx+1] == 0x33) {
-                size_t packetStart = searchIdx + 2;
-                size_t remainingLen = length - packetStart;
-                uint8_t* candidateData = &buffer[packetStart];
+        while (searchIdx + IOHOME_MIN_FRAME_LEN <= length) {
+            uint8_t ctrlByte = buffer[searchIdx];
 
-                size_t declaredBodyLen = (candidateData[0] & 0x1F) + 1;
+            // io-homecontrol MAC headers usually start with 0xFx (e.g., 0xF8, 0xF6, 0xF0)
+            if ((ctrlByte & 0xF0) == 0xF0) {
+                size_t declaredBodyLen = (ctrlByte & 0x1F) + 1;
                 size_t expectedTotalLen = declaredBodyLen + IOHOME_FRAME_CRC_LEN;
 
                 if (expectedTotalLen >= IOHOME_MIN_FRAME_LEN && expectedTotalLen <= 64) {
-                    if (expectedTotalLen <= remainingLen) {
-                        if (IoHomeNode::validateFrameCrc(candidateData, expectedTotalLen)) {
-                            outAuthStatus = ioNode.parseFrame(candidateData, expectedTotalLen, outFrame);
-                            consume(packetStart + expectedTotalLen); // Remove parsed packet
+                    if (searchIdx + expectedTotalLen <= length) {
+                        if (IoHomeNode::validateFrameCrc(&buffer[searchIdx], expectedTotalLen)) {
+                            outAuthStatus = ioNode.parseFrame(&buffer[searchIdx], expectedTotalLen, outFrame);
+                            consume(searchIdx + expectedTotalLen); // Remove parsed packet and preceding garbage
                             return true; // We found one!
                         }
                     } else {
-                        Serial.printf("    [Parser] Found Sync Word, but packet is split. Waiting for next chunk.\n");
+                        Serial.printf("    [Parser] Found valid MAC header, but packet is split. Waiting for next chunk.\n");
                         break; // Valid-looking header, but packet is split. Wait for next chunk.
                     }
                 }
