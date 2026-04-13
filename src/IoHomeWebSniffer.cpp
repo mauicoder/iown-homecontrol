@@ -10,7 +10,7 @@ void IoHomeWebSniffer::sysProvEvent(arduino_event_t *sys_event) {
             break;
         case ARDUINO_EVENT_PROV_START:
             Serial.println("\n>>> Wi-Fi Provisioning Started.");
-            Serial.println(">>> Use the 'ESP BLE Prov' App. Device: IoHomeSniffer, PoP: iown1234");
+            Serial.println(">>> Use the 'ESP BLE Prov' App. Device: PROV_IoHome, PoP: iown1234");
             break;
         case ARDUINO_EVENT_PROV_CRED_SUCCESS:
             Serial.println("\n>>> Provisioning Successful!");
@@ -37,7 +37,7 @@ void IoHomeWebSniffer::handlePackets() {
 
 void IoHomeWebSniffer::begin() {
     WiFi.onEvent(sysProvEvent);
-    WiFiProv.beginProvision(NETWORK_PROV_SCHEME_BLE, NETWORK_PROV_SCHEME_HANDLER_FREE_BTDM, NETWORK_PROV_SECURITY_1, "iown1234", "IoHomeSniffer");
+    WiFiProv.beginProvision(NETWORK_PROV_SCHEME_BLE, NETWORK_PROV_SCHEME_HANDLER_FREE_BTDM, NETWORK_PROV_SECURITY_1, "iown1234", "PROV_IoHome");
 
     // Using lambdas to bind class methods to the WebServer handlers
     _server.on("/", [this]() { handleRoot(); });

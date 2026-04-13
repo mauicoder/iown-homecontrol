@@ -277,15 +277,21 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
     Serial.println(""); // Use empty string for new line
 #endif
 
-    // The physical io-homecontrol protocol requires all data after the Sync Word
-    // to be PN9-whitened before transmission. We must encode our plaintext frame.
     std::vector<uint8_t> txBuffer = frame;
-    IoHomeNode::deWhiten(txBuffer.data(), txBuffer.size());
 
     // io-homecontrol is UART-encoded (8N1) over the air.
     // Since we receive the raw FSK bitstream and software-decode the UART frames in receiveFrame,
     // we must also manually UART-encode our transmission buffer so the awning can understand it.
     std::vector<uint8_t> uartBuffer;
+
+    // --- HARDWARE UART ALIGNMENT ---
+    // Before sending the first Start Bit, the RF line MUST be perfectly IDLE (High).
+    // The SX1262 natively ends the Sync Word and instantly begins the payload.
+    // Prepending 2 bytes of 0xFF ensures the awning's physical hardware UART decoder
+    // is fully synchronized and waiting for the first Start Bit.
+    uartBuffer.push_back(0xFF);
+    uartBuffer.push_back(0xFF);
+
     uint16_t currentTxByte = 0;
     int txBits = 0;
 
@@ -309,18 +315,23 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
     }
     while (txBits > 0) { pushBit(1); } // Pad final byte with Idle (1)
 
-    // Transmit the frame 6 times across all 3 frequencies to mimic the physical remote
+    // Append 2 bytes of IDLE (0xFF) to the end to guarantee the radio
+    // doesn't cut off the transmission power before the final Stop Bit completes.
+    uartBuffer.push_back(0xFF);
+    uartBuffer.push_back(0xFF);
+
+    // Transmit the frame 12 times across all 3 frequencies to mimic the physical remote
     // and hit the awning's wake window regardless of which channel it is currently scanning.
     int16_t state = RADIOLIB_ERR_NONE;
     const float freqs[3] = { 868.25f, 868.95f, 869.85f };
 
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 12; i++) {
         if (this->_phyLayer) {
             this->_phyLayer->standby();
             this->_phyLayer->setFrequency(freqs[i % 3]);
         }
         state = this->_phyLayer->transmit(uartBuffer.data(), uartBuffer.size());
-        if (i < 5) delay(60); // 60ms gap covers the wake window perfectly
+        if (i < 11) delay(30); // 30ms gap saturates the awning's wake window
     }
 
     // Restore original frequency
@@ -371,11 +382,6 @@ int16_t IoHomeNode::receiveFrame(IoHomeFrame_t& receivedFrame) {
         BoardHAL::startReceive();
         return readState;
     }
-
-    // De-whiten the received data in software.
-    // This is necessary because the transmitter's whitening algorithm is likely
-    // incompatible with the SX126x's hardware implementation.
-    IoHomeNode::deWhiten(rxBuffer.data(), rxBuffer.size());
 
     // 5. Now, parse the buffer we just read.
     if (!this->parseFrame(rxBuffer.data(), rxBuffer.size(), receivedFrame)) {
