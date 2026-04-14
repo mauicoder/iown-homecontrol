@@ -163,6 +163,7 @@ IoHomeStreamParser streamParser;
 
 extern volatile char webCommandTarget; // Hook into the Web Sniffer commands
 extern volatile uint8_t webCommandDevice;
+extern volatile bool isProvisioning;
 
 void setup() {
   // 1. HARDWARE INIT
@@ -206,10 +207,18 @@ void setup() {
     Serial.println(F("IoHomeNode initialized with multi-profile support."));
 
     // Display Ready State
-    BoardHAL::display.clearBuffer();
-    BoardHAL::display.drawStr(0, 15, BoardHAL::getBoardName());
-    BoardHAL::display.drawStr(0, 30, "Radio: LISTENING");
-    BoardHAL::display.sendBuffer();
+    if (!isProvisioning) {
+        BoardHAL::display.clearBuffer();
+        BoardHAL::display.drawStr(0, 15, BoardHAL::getBoardName());
+        if (WiFi.status() == WL_CONNECTED) {
+            String ipStr = "IP: " + WiFi.localIP().toString();
+            BoardHAL::display.drawStr(0, 30, ipStr.c_str());
+        } else {
+            BoardHAL::display.drawStr(0, 30, "Waiting for WiFi...");
+        }
+        BoardHAL::display.drawStr(0, 45, "Radio: LISTENING");
+        BoardHAL::display.sendBuffer();
+    }
 
   } else {
     Serial.println(F("RADIO INIT FAILED"));

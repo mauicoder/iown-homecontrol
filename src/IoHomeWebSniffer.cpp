@@ -1,21 +1,74 @@
 #include "IoHomeWebSniffer.h"
 #include "IoHome.h"
+#include "hal/BoardHAL.h"
+#include <qrcode.h>
+
+static void renderOledQR(esp_qrcode_handle_t qrcode) {
+    int size = esp_qrcode_get_size(qrcode);
+    int scale = (size > 30) ? 1 : 2; // Auto-scale to ensure it fits the 64px height
+    int x0 = (128 - (size * scale)) / 2;
+    int y0 = (64 - (size * scale)) / 2;
+
+    if (y0 < 0) y0 = 0; // Safety clamp
+
+    BoardHAL::display.clearBuffer();
+
+    // Draw a white background square for the QR code to ensure contrast
+    BoardHAL::display.setDrawColor(1);
+    BoardHAL::display.drawBox(x0 - 2, y0 - 2, (size * scale) + 4, (size * scale) + 4);
+
+    // Draw the black QR modules
+    BoardHAL::display.setDrawColor(0);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            if (esp_qrcode_get_module(qrcode, x, y)) {
+                BoardHAL::display.drawBox(x0 + (x * scale), y0 + (y * scale), scale, scale);
+            }
+        }
+    }
+    BoardHAL::display.setDrawColor(1); // Restore white text color
+    BoardHAL::display.setFont(u8g2_font_5x7_tr);
+    BoardHAL::display.drawStr(0, 20, "Scan");
+    BoardHAL::display.drawStr(0, 30, "App");
+    BoardHAL::display.drawStr(0, 40, "QR");
+    BoardHAL::display.sendBuffer();
+}
 
 volatile char webCommandTarget = 0; // Global variable to pass web commands to the main loop
 volatile uint8_t webCommandDevice = 0;
+volatile bool isProvisioning = false;
 
 IoHomeWebSniffer::IoHomeWebSniffer() : _server(80) {}
 
 void IoHomeWebSniffer::sysProvEvent(arduino_event_t *sys_event) {
     switch (sys_event->event_id) {
-        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP: {
             Serial.print("\n>>> Wi-Fi Connected! IP: ");
             Serial.println(WiFi.localIP());
+            isProvisioning = false;
+            BoardHAL::display.clearBuffer();
+            BoardHAL::display.setFont(u8g2_font_6x10_tr);
+            BoardHAL::display.drawStr(0, 15, BoardHAL::getBoardName());
+            String ipStr = "IP: " + WiFi.localIP().toString();
+            BoardHAL::display.drawStr(0, 30, ipStr.c_str());
+            BoardHAL::display.drawStr(0, 45, "Radio: LISTENING");
+            BoardHAL::display.sendBuffer();
             break;
-        case ARDUINO_EVENT_PROV_START:
+        }
+        case ARDUINO_EVENT_PROV_START: {
+            isProvisioning = true;
             Serial.println("\n>>> Wi-Fi Provisioning Started.");
             Serial.println(">>> Use the 'ESP BLE Prov' App. Device: PROV_IoHome, PoP: iown1234");
+            Serial.println(">>> Or scan the QR code below directly from the app:\n");
+            WiFiProv.printQR("PROV_IoHome", "iown1234", "ble");
+
+            // Render QR to OLED using ESP32's built-in QR library
+            const char* qrPayload = "{\"ver\":\"v1\",\"name\":\"PROV_IoHome\",\"pop\":\"iown1234\",\"transport\":\"ble\"}";
+            esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+            cfg.display_func = renderOledQR;
+            esp_qrcode_generate(&cfg, qrPayload);
             break;
+        }
         case ARDUINO_EVENT_PROV_CRED_SUCCESS:
             Serial.println("\n>>> Provisioning Successful!");
             break;
@@ -55,6 +108,7 @@ void IoHomeWebSniffer::handlePackets() {
 
 void IoHomeWebSniffer::begin() {
     WiFi.onEvent(sysProvEvent);
+
     WiFiProv.beginProvision(NETWORK_PROV_SCHEME_BLE, NETWORK_PROV_SCHEME_HANDLER_FREE_BTDM, NETWORK_PROV_SECURITY_1, "iown1234", "PROV_IoHome");
 
     // Using lambdas to bind class methods to the WebServer handlers
@@ -74,6 +128,21 @@ void IoHomeWebSniffer::begin() {
 
 void IoHomeWebSniffer::loop() {
     _server.handleClient();
+
+    // Self-Healing Wi-Fi Logic: If the board has stale/dead credentials from an old project,
+    // it will try to connect forever and never show the QR code.
+    // If 15 seconds pass without connecting, wipe the dead credentials and reboot into setup mode!
+    static uint32_t wifiTimeoutTimer = millis();
+    if (!isProvisioning && WiFi.status() != WL_CONNECTED) {
+        if (millis() - wifiTimeoutTimer > 15000) {
+            Serial.println("\n>>> Wi-Fi connection timed out! Wiping dead credentials and rebooting to Setup Mode... <<<");
+            WiFi.disconnect(false, true);
+            delay(500);
+            ESP.restart();
+        }
+    } else {
+        wifiTimeoutTimer = millis(); // Reset timer while connected or provisioning
+    }
 }
 
 void IoHomeWebSniffer::appendRawPacket(float freq, float rssi, size_t len, const uint8_t* data) {
