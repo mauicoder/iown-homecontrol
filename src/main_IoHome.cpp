@@ -63,6 +63,25 @@ void loadConfiguration() {
 
     preferences.end();
     ioNode.loadProfiles(devices, 5);
+
+    // Print the loaded keys and MACs to the console
+    int activeCount = 0;
+    Serial.println(F("\n--- ENROLLED DEVICES / KEYS ---"));
+    for (int i = 0; i < 5; i++) {
+        if (devices[i].active) {
+            activeCount++;
+            Serial.printf("Slot %d: Source MAC: %02X%02X%02X | Dest MAC: %02X%02X%02X | Seq: %u\n",
+                i + 1,
+                devices[i].sourceMac.n0, devices[i].sourceMac.n1, devices[i].sourceMac.n2,
+                devices[i].destMac.n0, devices[i].destMac.n1, devices[i].destMac.n2,
+                devices[i].seqCounter);
+        }
+    }
+    if (activeCount == 0) {
+        Serial.println(F("No keys enrolled yet. Use your remote to send a 1-Way Key Transfer (0x30)."));
+    }
+    Serial.printf("Total enrolled keys: %d / 5\n", activeCount);
+    Serial.println(F("-------------------------------\n"));
 }
 
 void saveConfiguration() {

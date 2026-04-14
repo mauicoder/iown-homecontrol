@@ -38,6 +38,8 @@ volatile char webCommandTarget = 0; // Global variable to pass web commands to t
 volatile uint8_t webCommandDevice = 0;
 volatile bool isProvisioning = false;
 
+extern IoHomeProfile devices[5]; // Access the globally enrolled devices
+
 IoHomeWebSniffer::IoHomeWebSniffer() : _server(80) {}
 
 void IoHomeWebSniffer::sysProvEvent(arduino_event_t *sys_event) {
@@ -78,6 +80,28 @@ void IoHomeWebSniffer::sysProvEvent(arduino_event_t *sys_event) {
 }
 
 void IoHomeWebSniffer::handleRoot() {
+    String controlsHtml = "";
+    int activeCount = 0;
+    for (int i = 0; i < 5; i++) {
+        if (devices[i].active) {
+            activeCount++;
+            char buf[512];
+            snprintf(buf, sizeof(buf),
+                "<b>Channel %d (Src: %02X%02X%02X, Dest: %02X%02X%02X):</b><br>"
+                "<button class=\"btn\" onclick=\"fetch('/cmd?c=U&d=%d')\">UP</button>"
+                "<button class=\"btn\" onclick=\"fetch('/cmd?c=S&d=%d')\">MY</button>"
+                "<button class=\"btn\" onclick=\"fetch('/cmd?c=D&d=%d')\">DOWN</button><br><br>",
+                i + 1,
+                devices[i].sourceMac.n0, devices[i].sourceMac.n1, devices[i].sourceMac.n2,
+                devices[i].destMac.n0, devices[i].destMac.n1, devices[i].destMac.n2,
+                i, i, i);
+            controlsHtml += buf;
+        }
+    }
+    if (activeCount == 0) {
+        controlsHtml = "<p style='color:#ff0;'>No devices enrolled yet. Use your remote to send a 1-Way Key Transfer.</p>";
+    }
+
     String html = R"HTML(<html><head><title>IoHome Sniffer</title>
     <style>body{font-family: monospace; background: #121212; color: #0f0; padding: 20px;} .pkt{border-bottom: 1px solid #333; padding: 5px; margin-bottom: 5px;}
     .btn{background:#333;color:#0f0;border:1px solid #0f0;padding:12px 24px;margin:5px;cursor:pointer;font-family:monospace;font-size:16px;font-weight:bold;}
@@ -85,16 +109,7 @@ void IoHomeWebSniffer::handleRoot() {
     .controls{margin-bottom: 20px; padding-bottom: 20px; border-bottom: 2px solid #0f0;}
     </style>
     </head><body><h2>IoHome Packet Sniffer</h2>
-    <div class="controls">
-        <b>Channel 1:</b>
-        <button class="btn" onclick="fetch('/cmd?c=U&d=0')">UP</button>
-        <button class="btn" onclick="fetch('/cmd?c=S&d=0')">MY</button>
-        <button class="btn" onclick="fetch('/cmd?c=D&d=0')">DOWN</button><br>
-        <b>Channel 2:</b>
-        <button class="btn" onclick="fetch('/cmd?c=U&d=1')">UP</button>
-        <button class="btn" onclick="fetch('/cmd?c=S&d=1')">MY</button>
-        <button class="btn" onclick="fetch('/cmd?c=D&d=1')">DOWN</button>
-    </div><p>Waiting for packets...</p><div id="log"></div>
+    <div class="controls">)HTML" + controlsHtml + R"HTML(</div><p>Waiting for packets...</p><div id="log"></div>
     <script>setInterval(() => { fetch('/packets').then(r => r.text()).then(t => {
     if(t) document.getElementById('log').innerHTML = t + document.getElementById('log').innerHTML;
     });}, 1000);</script></body></html>)HTML";
