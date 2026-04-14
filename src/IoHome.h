@@ -136,11 +136,7 @@ class IoHomeNode {
                uint8_t* stack_key,
                uint8_t* system_key);
 
-    // Returns true if a valid frame was captured and parsed
-    bool loop(IoHomeFrame_t& rxFrame);
-
     int16_t transmitFrame(const std::vector<uint8_t>& frame);
-    int16_t receiveFrame(IoHomeFrame_t& receivedFrame);
 
     static uint16_t crc16(const uint8_t* data, size_t length);
     static bool validateFrameCrc(const uint8_t* frame, size_t frameLength);
@@ -152,8 +148,6 @@ class IoHomeNode {
     );
 
     bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
-
-    static void deWhiten(uint8_t* data, size_t length);
 
     // Commands
     uint16_t getSequenceCounter() const { return _sequence_counter; }

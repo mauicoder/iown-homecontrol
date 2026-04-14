@@ -33,9 +33,6 @@ uint32_t lastHopTime = 0;
 const uint32_t HOP_INTERVAL_MS = 10; // Hop every 10ms
 const float RSSI_HOP_THRESHOLD = -95.0; // Pause hopping if signal is stronger than this
 
-uint32_t lastRssiUpdate = 0;
-uint32_t validPacketCount = 0;
-
 // --- PACKET HISTORY ---
 #define HISTORY_SIZE 3
 char packetHistory[HISTORY_SIZE][32];
@@ -45,6 +42,7 @@ uint8_t historyCount = 0;
 // Define the channel based on targetFreq
 IoHomeChannel_t ioHomeChannel = { .c0 = IOHOME_CHAN_C0, .c1 = IOHOME_CHAN_C1 };
 
+uint32_t validPacketCount = 0;
 Preferences preferences;
 
 // Default to zeroed keys/addresses. Will be loaded from NVRAM on boot.
@@ -282,29 +280,6 @@ void loop() {
     }
   }
 
-  // --- 1. MONITOR RSSI (Ambient Noise) ---
-  if (millis() - lastRssiUpdate > 1000) {
-    lastRssiUpdate = millis();
-
-    // Get instantaneous RSSI to verify the antenna is "live"
-    float currentRssi = BoardHAL::getInstantaneousRSSI();
-
-    Serial.print(F("Freq: "));
-    Serial.print(targetFreq);
-    Serial.print(F(" MHz | "));
-    Serial.print(F("RSSI: "));
-    Serial.print(currentRssi);
-    Serial.print(F(" dBm | "));
-
-    if (currentRssi > -1.0) {
-      Serial.println(F("STATUS: BLINDED (Hardware/Antenna Issue)"));
-      BoardHAL::setLed(true); // Constant LED means hardware fail
-    } else {
-      Serial.println(F("STATUS: OK"));
-      // Short pulse to show life
-      BoardHAL::setLed(true); delay(10); BoardHAL::setLed(false);
-    }
-  }
 
   // --- 2. IOHOME PACKET HANDLING ---
 

@@ -55,45 +55,6 @@ uint16_t IoHomeNode::crc16(const uint8_t* data, size_t length) {
   return IoHomeParser::crc16(data, length);
 }
 
-// Helper function to reverse the bit order of a byte.
-// This is necessary to match the on-air LSB-first transmission format.
-static uint8_t reverse_bits(uint8_t b) {
-   b = (b & 0xF0) >> 4 | (b & 0x0F) << 4;
-   b = (b & 0xCC) >> 2 | (b & 0x33) << 2;
-   b = (b & 0xAA) >> 1 | (b & 0x55) << 1;
-   return b;
-}
-
-void IoHomeNode::deWhiten(uint8_t* data, size_t length) {
-    // This is a software implementation of the standard PN9 de-whitening process.
-    // The transmitter must be using this algorithm for our SX1262 to be compatible.
-    // The key is that the protocol documentation states "bits of each byte are swapped".
-
-    uint16_t lfsr = IOHOME_PN9_LFSR_INIT; // Standard PN9 initial state
-
-    for (size_t i = 0; i < length; i++) {
-        // 1. Reverse the bits of the received byte to match the on-air LSB-first sequence.
-        uint8_t reversed_whitened_byte = reverse_bits(data[i]);
-
-        uint8_t dewhitened_byte = 0;
-        for (int j = 0; j < 8; j++) {
-            // 2. Generate the next bit of the PN9 whitening sequence.
-            uint8_t lfsr_out = (lfsr >> 8) & 0x01;
-
-            // 3. XOR the bit from the reversed byte (processing MSB to LSB, which is on-air LSB to MSB)
-            uint8_t in_bit = (reversed_whitened_byte >> (7 - j)) & 0x01;
-            dewhitened_byte |= ((in_bit ^ lfsr_out) << (7 - j));
-
-            // 4. Update the LFSR state using the standard PN9 polynomial (x^9 + x^5 + 1).
-            // The new bit is an XOR of the 9th and 5th bits (indexed 8 and 4).
-            uint16_t new_bit = ((lfsr >> 8) ^ (lfsr >> 4)) & 0x01;
-            lfsr = ((lfsr << 1) | new_bit) & 0x1FF;
-        }
-        // 5. Reverse the de-whitened byte back to the standard in-memory order.
-        data[i] = reverse_bits(dewhitened_byte);
-    }
-}
-
 bool IoHomeNode::validateFrameCrc(const uint8_t* frame, size_t frameLength) {
   return IoHomeParser::validateFrameCrc(frame, frameLength);
 }
@@ -150,10 +111,6 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   // A: Insert the 2-byte Rolling Counter (Big Endian: High Byte, then Low Byte)
   frame[offset++] = (uint8_t)((this->_sequence_counter >> 8) & 0xFF); // High Byte
   frame[offset++] = (uint8_t)(this->_sequence_counter & 0xFF);        // Low Byte
-
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-  Serial.printf("[IoHomeNode::buildFrame] Using Sequence Counter: 0x%04X\n", this->_sequence_counter);
-#endif
 
   // --- LAYER 3: AES-128 MAC (Message Authentication Code) ---
   uint8_t output_block[16] = {0};
@@ -267,14 +224,6 @@ int16_t IoHomeNode::sendButton(uint16_t buttonAction) {
 
 int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
 
-    // float freq = this->_channel->c0 + (this->_channel->c1 / 100.0);
-    // #if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    // Serial.printf("[IoHomeNode::transmitFrame] Setting frequency to %.2f MHz (Channel C0:%u, C1:%u)\n", freq, this->_channel->c0, this->_channel->c1);
-    // #endif
-    // // Set frequency according to the current channel
-    // int16_t state = this->_phyLayer->setFrequency(freq);
-    // RADIOLIB_ASSERT(state);
-
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
     Serial.printf("[IoHomeNode::transmitFrame] Attempting to transmit frame (len %u): ", frame.size());
     for (size_t i = 0; i < frame.size(); ++i) {
@@ -355,59 +304,6 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
     return state;
 }
 
-int16_t IoHomeNode::receiveFrame(IoHomeFrame_t& receivedFrame) {
-    // 1. Check for incoming data
-    size_t packetLength = this->_phyLayer->getPacketLength();
-
-    if (packetLength == 0) {
-        return RADIOLIB_ERR_RX_TIMEOUT;
-    }
-
-    // Ghost Packet Detection:
-    // The generic PhysicalLayer abstraction doesn't expose an instantaneous RSSI read
-    // without reading the packet. We use the BoardHAL to bypass this limitation.
-    float instantaneousRssi = BoardHAL::getInstantaneousRSSI();
-
-    if (instantaneousRssi < -100.0) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-            Serial.printf("[IoHomeNode::receiveFrame] Discarding ghost packet (RSSI: %.2f dBm, Len: %u)\n", instantaneousRssi, packetLength);
-#endif
-            // Forcefully reset the radio's state to clear the FIFO and any stuck IRQ flags.
-            // This is more robust than just calling startReceive().
-            this->_phyLayer->standby();
-            BoardHAL::startReceive();
-            return RADIOLIB_ERR_RX_TIMEOUT;
-        }
-
-    // 2. Read the data
-    std::vector<uint8_t> rxBuffer(packetLength);
-    int16_t readState = this->_phyLayer->readData(rxBuffer.data(), packetLength);
-    if (readState != RADIOLIB_ERR_NONE) {
-        // If read fails, something is very wrong. Reset and get out.
-        this->_phyLayer->standby();
-        BoardHAL::startReceive();
-        return readState;
-    }
-
-    // 5. Now, parse the buffer we just read.
-    if (!this->parseFrame(rxBuffer.data(), rxBuffer.size(), receivedFrame)) {
-        // PARSE FAILED (bad CRC, etc.)
-        // This is a critical failure point. The radio might be in a weird state.
-        // Forcefully reset it to prevent subsequent noise from being detected as packets.
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.println("[IoHomeNode::receiveFrame] Packet failed validation (CRC/Parse). Force-resetting radio state.");
-#endif
-        this->_phyLayer->standby();
-        BoardHAL::startReceive();
-        return RADIOLIB_ERR_CRC_MISMATCH;
-    }
-
-    // 6. SUCCESS! The packet was valid.
-    // Now we can safely restart the receiver for the next packet.
-    BoardHAL::startReceive();
-    return RADIOLIB_ERR_NONE; // Success!
-}
-
 int16_t IoHomeNode::sendWink(NodeId targetMac) {
     // 0x10 = Standard 1-way / 2-way control bits (adjust as needed)
     // 0x01 = Specific control flags
@@ -435,22 +331,4 @@ int16_t IoHomeNode::sendWink(NodeId targetMac) {
 
     // Send it over the radio
     return this->transmitFrame(frame);
-}
-
-bool IoHomeNode::loop(IoHomeFrame_t& rxFrame) {
-    // 1. Check if the radio has received a packet
-    // This calls your existing receiveFrame logic
-    int16_t state = this->receiveFrame(rxFrame);
-
-    if (state == RADIOLIB_ERR_NONE && rxFrame.isValid) {
-        // We found a valid, cryptographically signed frame!
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-        Serial.printf("[Listener] Captured Cmd: 0x%02X from %02X%02X%02X\n",
-                      rxFrame.commandId,
-                      rxFrame.sourceMac.n0, rxFrame.sourceMac.n1, rxFrame.sourceMac.n2);
-#endif
-        return true;
-    }
-
-    return false;
 }

@@ -87,12 +87,6 @@ void IoHomeCrypto::generateMac(const IoHomeFrame_t& parsedFrame, const uint8_t* 
         for (int i=10; i<16; i++) iv[i] = 0x00;
     }
 
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.print("[IoHomeCrypto] AES IV Block : ");
-    for(size_t i = 0; i < 16; i++) Serial.printf("%02X ", iv[i]);
-    Serial.println();
-#endif
-
     mbedtls_aes_crypt_ecb(&aes, MBEDTLS_AES_ENCRYPT, iv, outMac);
     mbedtls_aes_free(&aes);
 }
@@ -101,18 +95,16 @@ bool IoHomeCrypto::verifyMac(const IoHomeFrame_t& parsedFrame, const uint8_t* fr
     uint8_t expected_block[16] = {0};
     generateMac(parsedFrame, frameData, rxCounter, activeKey, expected_block);
 
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.print("[IoHomeCrypto] Expected MAC : ");
-    for(int i = 0; i < 16; i++) Serial.printf("%02X ", expected_block[i]);
-    Serial.println();
-    Serial.print("[IoHomeCrypto] Received MAC : ");
-    for(size_t i = 0; i < macLen; i++) Serial.printf("%02X ", rxMac[i]);
-    Serial.println();
-#endif
-
     for (size_t i = 0; i < macLen; i++) {
         if (rxMac[i] != expected_block[i]) {
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
+            Serial.println("[IoHomeCrypto] --- AES MAC VERIFICATION FAILED ---");
+            Serial.print("[IoHomeCrypto] Expected MAC : ");
+            for(int j = 0; j < 16; j++) Serial.printf("%02X ", expected_block[j]);
+            Serial.println();
+            Serial.print("[IoHomeCrypto] Received MAC : ");
+            for(size_t j = 0; j < macLen; j++) Serial.printf("%02X ", rxMac[j]);
+            Serial.println();
             Serial.printf("[IoHomeCrypto] ERROR: MAC mismatch at byte %u: Received 0x%02X, Expected 0x%02X\n", i, rxMac[i], expected_block[i]);
 #endif
             return false;
