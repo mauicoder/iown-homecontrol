@@ -2,7 +2,6 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiProv.h>
 #include <WebServer.h>
 #include "IoHome.h"
 
@@ -13,7 +12,6 @@ private:
 
     void handleRoot();
     void handlePackets();
-    static void sysProvEvent(arduino_event_t *sys_event);
 public:
     IoHomeWebSniffer();
     void begin();

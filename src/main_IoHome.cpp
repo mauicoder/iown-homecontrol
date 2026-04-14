@@ -10,6 +10,7 @@
 #include "IoHomeCrypto.h"
 #include "IoHomeWebSniffer.h"
 #include "hal/BoardHAL.h" // Include the hardware abstraction layer for board-specific configurations
+#include "UIManager.h"
 
 // --- INTERRUPT HANDLING ---
 // Flag to indicate that a packet was received.
@@ -32,11 +33,6 @@ float targetFreq = IOHOME_FREQUENCIES[0];
 uint32_t lastHopTime = 0;
 const uint32_t HOP_INTERVAL_MS = 10; // Hop every 10ms
 const float RSSI_HOP_THRESHOLD = -95.0; // Pause hopping if signal is stronger than this
-
-// --- PACKET HISTORY ---
-#define HISTORY_SIZE 3
-char packetHistory[HISTORY_SIZE][32];
-uint8_t historyCount = 0;
 
 // --- IOHOME LIBRARY OBJECTS ---
 // Define the channel based on targetFreq
@@ -115,7 +111,6 @@ void saveConfiguration() {
     preferences.putBytes("devices", devices, sizeof(devices));
     preferences.end();
 }
-
 
 // --- PERSISTENT STATE MACHINE PARSER ---
 class IoHomeStreamParser {
@@ -205,7 +200,6 @@ IoHomeStreamParser streamParser;
 
 extern volatile char webCommandTarget; // Hook into the Web Sniffer commands
 extern volatile uint8_t webCommandDevice;
-extern volatile bool isProvisioning;
 
 void setup() {
   // 1. HARDWARE INIT
@@ -213,11 +207,7 @@ void setup() {
 
   // 2. DISPLAY INIT
   BoardHAL::display.begin();
-  BoardHAL::display.setFont(u8g2_font_6x10_tr);
-  BoardHAL::display.clearBuffer();
-  BoardHAL::display.drawStr(0, 15, BoardHAL::getBoardName());
-  BoardHAL::display.drawStr(0, 30, "Booting...");
-  BoardHAL::display.sendBuffer();
+  UIManager::drawBootScreen();
 
   // Initialize Serial and wait for connection
   Serial.begin(115200);
@@ -228,6 +218,8 @@ void setup() {
   Serial.println(F("==============================="));
 
   loadConfiguration();
+
+  UIManager::begin();
   webSniffer.begin();
 
   // 3. RADIOLIB STARTUP
@@ -249,17 +241,12 @@ void setup() {
     Serial.println(F("IoHomeNode initialized with multi-profile support."));
 
     // Display Ready State
-    if (!isProvisioning) {
-        BoardHAL::display.clearBuffer();
-        BoardHAL::display.drawStr(0, 15, BoardHAL::getBoardName());
+    if (!UIManager::isProvisioning()) {
         if (WiFi.status() == WL_CONNECTED) {
-            String ipStr = "IP: " + WiFi.localIP().toString();
-            BoardHAL::display.drawStr(0, 30, ipStr.c_str());
+            UIManager::drawReadyScreen("IP: " + WiFi.localIP().toString());
         } else {
-            BoardHAL::display.drawStr(0, 30, "Waiting for WiFi...");
+            UIManager::drawReadyScreen("Waiting for WiFi...");
         }
-        BoardHAL::display.drawStr(0, 45, "Radio: LISTENING");
-        BoardHAL::display.sendBuffer();
     }
 
   } else {
@@ -274,6 +261,8 @@ void setup() {
 void loop() {
   // Handle Web Server Clients
   webSniffer.loop();
+  // Handle System UI and WiFi state
+  UIManager::loop();
 
   // --- 0. CHANNEL HOPPING ---
   if (!receivedFlag && (millis() - lastHopTime >= HOP_INTERVAL_MS)) {
@@ -424,24 +413,9 @@ void loop() {
           }
 
           // Update OLED
-          if (historyCount < HISTORY_SIZE) historyCount++;
-          for (int h = HISTORY_SIZE - 1; h > 0; --h) {
-              strncpy(packetHistory[h], packetHistory[h-1], 32);
+          if (!UIManager::isProvisioning()) {
+              UIManager::drawPacketHistory(validPacketCount, parsedFrame);
           }
-          snprintf(packetHistory[0], 32, "#%lu %02X%02X%02X>%02X%02X%02X %02X",
-                   validPacketCount,
-                   parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
-                   parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2,
-                   parsedFrame.commandId);
-
-          BoardHAL::display.clearBuffer();
-          char headerBuf[32];
-          snprintf(headerBuf, 32, "Valid Rx: %lu", validPacketCount);
-          BoardHAL::display.drawStr(0, 12, headerBuf);
-          for (int h = 0; h < historyCount; h++) {
-              BoardHAL::display.drawStr(0, 28 + (h * 15), packetHistory[h]);
-          }
-          BoardHAL::display.sendBuffer();
       }
 
     } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
