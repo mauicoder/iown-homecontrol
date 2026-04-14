@@ -209,11 +209,33 @@ int16_t IoHomeNode::sendButton(uint16_t buttonAction, uint8_t profileIndex) {
         } else {
             targetedPayload = {0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x80, 0xC8, 0x00, 0x00};
         }
-        std::vector<uint8_t> targetedFrame = this->buildFrame(0xF0, 0x00, IOHOME_CMD_0x00, targetedPayload, profile);
+        // 0x60 = 2-Way Mode (Bit 7 = 0). Forces the awning to generate a reply packet!
+        std::vector<uint8_t> targetedFrame = this->buildFrame(0x60, 0x00, IOHOME_CMD_0x00, targetedPayload, profile);
         state = this->transmitFrame(targetedFrame);
     }
 
     return state;
+}
+
+int16_t IoHomeNode::pollStatus(uint8_t profileIndex) {
+    if (profileIndex >= _numProfiles) return RADIOLIB_ERR_INVALID_NUM_SAMPLES;
+    IoHomeProfile& profile = _profiles[profileIndex];
+
+    // 1. WAKE-UP / BROADCAST FRAME
+    // Awning receivers sleep to save power. We broadcast the poll first to wake them up.
+    NodeId originalDest = profile.destMac;
+    profile.destMac = {0x00, 0x00, 0x3F};
+    std::vector<uint8_t> targetedPayload = {};
+    std::vector<uint8_t> broadcastFrame = this->buildFrame(0xF0, 0x00, 0x54, targetedPayload, profile);
+    this->transmitFrame(broadcastFrame);
+
+    // Restore original destination MAC
+    profile.destMac = originalDest;
+
+    // 2. TARGETED POLL FRAME
+    // Send Command 0x54 (Get General Info 1) in 2-Way Mode (0x60)
+    std::vector<uint8_t> targetedFrame = this->buildFrame(0x60, 0x00, 0x54, targetedPayload, profile);
+    return this->transmitFrame(targetedFrame);
 }
 
 int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
@@ -269,18 +291,18 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
     uartBuffer.push_back(0xFF);
     uartBuffer.push_back(0xFF);
 
-    // Transmit the frame 12 times across all 3 frequencies to mimic the physical remote
+    // Transmit the frame 18 times across all 3 frequencies to mimic the physical remote
     // and hit the awning's wake window regardless of which channel it is currently scanning.
     int16_t state = RADIOLIB_ERR_NONE;
     const float freqs[3] = { 868.25f, 868.95f, 869.85f };
 
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 18; i++) {
         if (this->_phyLayer) {
             this->_phyLayer->standby();
             this->_phyLayer->setFrequency(freqs[i % 3]);
         }
         state = this->_phyLayer->transmit(uartBuffer.data(), uartBuffer.size());
-        if (i < 11) delay(30); // 30ms gap saturates the awning's wake window
+        if (i < 17) delay(30); // 30ms gap saturates the awning's wake window
     }
 
     // Restore original frequency

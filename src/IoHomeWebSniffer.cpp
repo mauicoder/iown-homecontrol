@@ -23,11 +23,12 @@ void IoHomeWebSniffer::handleRoot() {
                 "<span style='font-size:12px;color:#aaa;'>Src: %02X%02X%02X | Dest: %02X%02X%02X</span><br>"
                 "<button class=\"btn\" onclick=\"fetch('/cmd?c=U&d=%d')\">UP</button>"
                 "<button class=\"btn\" onclick=\"fetch('/cmd?c=S&d=%d')\">MY</button>"
-                "<button class=\"btn\" onclick=\"fetch('/cmd?c=D&d=%d')\">DOWN</button><br><br>",
+                "<button class=\"btn\" onclick=\"fetch('/cmd?c=D&d=%d')\">DOWN</button>"
+                "<button class=\"btn\" style=\"background:#005500;\" onclick=\"fetch('/cmd?c=P&d=%d')\">POLL</button><br><br>",
                 i + 1, i, devices[i].description, i, i,
                 devices[i].sourceMac.n0, devices[i].sourceMac.n1, devices[i].sourceMac.n2,
                 devices[i].destMac.n0, devices[i].destMac.n1, devices[i].destMac.n2,
-                i, i, i);
+                i, i, i, i);
             controlsHtml += buf;
         }
     }
@@ -120,15 +121,37 @@ void IoHomeWebSniffer::appendDecodedPacket(uint32_t frameCount, const IoHomeFram
         }
     } else if (frame.commandId == 0x30) {
         actionStr = " | <span style='color:#ff0;'>Action: 1-WAY KEY TRANSFER</span>";
+    } else if (frame.commandId == 0x54) {
+        actionStr = " | <span style='color:#0f0;'>Action: POLL STATUS (Get Info 1)</span>";
+    } else if (frame.commandId == 0x55) {
+        actionStr = " | <span style='color:#0ff;'>Action: STATUS REPLY (Info 1 Answer)</span>";
+    }
+
+    bool isFromAwning = false;
+    for (int i = 0; i < 5; i++) {
+        if (devices[i].active && memcmp(&devices[i].destMac, &frame.sourceMac, 3) == 0) {
+            isFromAwning = true;
+            break;
+        }
+    }
+    if (isFromAwning) {
+        actionStr += " | <span style='color:#f0f;'>[AWNING REPLY]</span>";
+    }
+
+    String payloadStr = "Payload: ";
+    for (size_t i = 0; i < frame.payload.size(); i++) {
+        char hexBuf[4];
+        snprintf(hexBuf, sizeof(hexBuf), "%02X ", frame.payload[i]);
+        payloadStr += hexBuf;
     }
 
     char parsedHtml[1024];
     snprintf(parsedHtml, sizeof(parsedHtml),
-             "<div class='pkt' style='color:#0ff;'><b>#%lu DECODED IOHOME FRAME</b><br>Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X | Auth: %s%s</div>",
+             "<div class='pkt' style='color:#0ff;'><b>#%lu DECODED IOHOME FRAME</b><br>Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X | Auth: %s%s<br><span style='color:#aaa;'>%s</span></div>",
              frameCount, frame.commandId,
              frame.sourceMac.n0, frame.sourceMac.n1, frame.sourceMac.n2,
              frame.destMac.n0, frame.destMac.n1, frame.destMac.n2,
-             isAuth ? "SUCCESS" : "FAILED", actionStr.c_str());
+             isAuth ? "SUCCESS" : "FAILED", actionStr.c_str(), payloadStr.c_str());
     // Prepend so packets display in reverse chronological order within the batch
     _newPackets = String(parsedHtml) + _newPackets;
     if (_newPackets.length() > 8192) _newPackets = ""; // Memory protection

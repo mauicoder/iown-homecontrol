@@ -157,6 +157,7 @@ class IoHomeNode {
 
     // Commands
     int16_t sendButton(uint16_t buttonAction, uint8_t profileIndex);
+    int16_t pollStatus(uint8_t profileIndex);
 
     // Template helpers (Must be in header)
     template<typename T>

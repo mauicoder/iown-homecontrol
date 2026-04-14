@@ -22,9 +22,6 @@ uint16_t IoHomeParser::crc16(const uint8_t* data, size_t length) {
 }
 
 bool IoHomeParser::validateFrameCrc(const uint8_t* frame, size_t frameLength) {
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-  Serial.printf("[IoHomeParser::validateFrameCrc] Validating CRC for frame of length: %u\n", frameLength);
-#endif
   if (frameLength < IOHOME_FRAME_CRC_LEN) {
 #if defined(ARDUINO) && defined(DEBUG_IOHOME)
     Serial.printf("[IoHomeParser::validateFrameCrc] Frame too short (len %u) to contain CRC.\n", frameLength);
@@ -35,9 +32,6 @@ bool IoHomeParser::validateFrameCrc(const uint8_t* frame, size_t frameLength) {
   uint16_t calculatedCrc = crc16(frame, IOHOME_FRAME_CRC_POS(frameLength));
   uint16_t receivedCrc = frame[IOHOME_FRAME_CRC_POS(frameLength)] | (frame[IOHOME_FRAME_CRC_POS(frameLength) + 1] << 8);
 
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-  Serial.printf("[IoHomeParser::validateFrameCrc] Calculated CRC: 0x%04X, Received CRC: 0x%04X\n", calculatedCrc, receivedCrc);
-#endif
   return calculatedCrc == receivedCrc;
 }
 

@@ -159,28 +159,25 @@ public:
 
     bool extractNextFrame(IoHomeNode& ioNode, IoHomeFrame_t& outFrame, bool& outAuthStatus) {
         size_t searchIdx = 0;
-        Serial.printf(">>> Searching rolling buffer (Current length: %zu bytes)\n", length);
+        // Serial.printf(">>> Searching rolling buffer (Current length: %zu bytes)\n", length); // Disabled to reduce log spam
 
         while (searchIdx + IOHOME_MIN_FRAME_LEN <= length) {
             uint8_t ctrlByte = buffer[searchIdx];
 
-            // io-homecontrol MAC headers usually start with 0xFx (e.g., 0xF8, 0xF6, 0xF0)
-            if ((ctrlByte & 0xF0) == 0xF0) {
-                size_t declaredBodyLen = (ctrlByte & 0x1F) + 1;
-                size_t expectedTotalLen = declaredBodyLen + IOHOME_FRAME_CRC_LEN;
+            size_t declaredBodyLen = (ctrlByte & 0x1F) + 1;
+            size_t expectedTotalLen = declaredBodyLen + IOHOME_FRAME_CRC_LEN;
 
-                if (expectedTotalLen >= IOHOME_MIN_FRAME_LEN && expectedTotalLen <= 64) {
-                    if (searchIdx + expectedTotalLen <= length) {
-                        if (IoHomeNode::validateFrameCrc(&buffer[searchIdx], expectedTotalLen)) {
-                            outAuthStatus = ioNode.parseFrame(&buffer[searchIdx], expectedTotalLen, outFrame);
-                            consume(searchIdx + expectedTotalLen); // Remove parsed packet and preceding garbage
-                            return true; // We found one!
-                        }
-                    } else {
-                        Serial.printf("    [Parser] Found valid MAC header, but packet is split. Waiting for next chunk.\n");
-                        break; // Valid-looking header, but packet is split. Wait for next chunk.
+            if (expectedTotalLen >= IOHOME_MIN_FRAME_LEN && expectedTotalLen <= 64) {
+                if (searchIdx + expectedTotalLen <= length) {
+                    if (IoHomeNode::validateFrameCrc(&buffer[searchIdx], expectedTotalLen)) {
+                        outAuthStatus = ioNode.parseFrame(&buffer[searchIdx], expectedTotalLen, outFrame);
+                        consume(searchIdx + expectedTotalLen); // Remove parsed packet and preceding garbage
+                        return true; // We found one!
                     }
                 }
+                // We no longer break on split packets. Since we removed the strict 0xF0 header filter,
+                // random garbage bytes near the end of the buffer might evaluate to a long expectedTotalLen.
+                // If we break here, we stall the parser. Full packets are always read in one piece via FSK.
             }
             searchIdx++;
         }
@@ -278,8 +275,9 @@ void loop() {
       BoardHAL::startReceive();
       lastHopTime = millis();
     } else {
-      // Signal detected! Pause hopping for 20ms to allow the packet to arrive
-      lastHopTime = millis() + 20;
+      // Signal detected! Pause hopping for 100ms to allow the packet to arrive.
+      // This ensures we safely bridge the 30ms gaps between rapid-fire 2-way transmissions.
+      lastHopTime = millis() + 100;
     }
   }
 
@@ -332,6 +330,24 @@ void loop() {
                 parsedFrame.commandId,
                 parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
                 parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+
+          Serial.print(F("    Payload: "));
+          for (size_t i = 0; i < parsedFrame.payload.size(); i++) {
+              Serial.printf("%02X ", parsedFrame.payload[i]);
+          }
+          Serial.println();
+
+          // Check if this packet came FROM one of our known Awnings
+          bool isFromAwning = false;
+          for (int i = 0; i < 5; i++) {
+              if (devices[i].active && memcmp(&devices[i].destMac, &parsedFrame.sourceMac, 3) == 0) {
+                  isFromAwning = true;
+                  break;
+              }
+          }
+          if (isFromAwning) {
+              Serial.println(F("    >>> AWNING ACKNOWLEDGMENT/REPLY DETECTED! <<<"));
+          }
 
           if (!isAuth) {
               Serial.println(F("    >>> AES MAC VERIFICATION FAILED (Or No Keys) <<<"));
@@ -390,6 +406,10 @@ void loop() {
               } else {
                   Serial.println(" <<<");
               }
+          } else if (parsedFrame.commandId == 0x54 && isAuth) {
+              Serial.println("    >>> DECODED ACTION: POLL STATUS (Get Info 1) <<<");
+          } else if (parsedFrame.commandId == 0x55 && isAuth) {
+              Serial.println("    >>> DECODED ACTION: STATUS REPLY (Info 1 Answer) <<<");
           }
 
           // Automatically learn the targeted Awning's address from authenticated 0x00 commands
@@ -473,7 +493,7 @@ void loop() {
           }
       }
 
-      if (execute && (c == 'U' || c == 'u' || c == 'D' || c == 'd' || c == 'S' || c == 's' || c == 'm' || c == 'M')) {
+      if (execute && (c == 'U' || c == 'u' || c == 'D' || c == 'd' || c == 'S' || c == 's' || c == 'm' || c == 'M' || c == 'P' || c == 'p')) {
           BoardHAL::radio->standby(); // Pause receiving to free up the radio chip
           int16_t state = RADIOLIB_ERR_NONE;
 
@@ -483,6 +503,9 @@ void loop() {
           } else if (c == 'D' || c == 'd') {
               Serial.printf("\n>>> USER COMMAND: SENDING 'DOWN' ON CH %d <<<\n", targetDevice + 1);
               state = ioNode.sendButton(IOHOME_ACTION_DOWN, targetDevice);
+          } else if (c == 'P' || c == 'p') {
+              Serial.printf("\n>>> USER COMMAND: POLLING STATUS ON CH %d <<<\n", targetDevice + 1);
+              state = ioNode.pollStatus(targetDevice);
           } else {
               Serial.printf("\n>>> USER COMMAND: SENDING 'MY/STOP' ON CH %d <<<\n", targetDevice + 1);
               state = ioNode.sendButton(IOHOME_ACTION_MY, targetDevice);
