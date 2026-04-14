@@ -49,20 +49,42 @@ IoHomeProfile devices[5];
 IoHomeNode ioNode(BoardHAL::radio, &ioHomeChannel);
 IoHomeWebSniffer webSniffer;
 
+void saveConfiguration(); // Forward declaration
+
 // --- CONFIGURATION MANAGEMENT ---
 void loadConfiguration() {
     preferences.begin("iohome", true); // true = read-only mode
 
-    if (preferences.getBytesLength("devices") == sizeof(devices)) {
+    size_t len = preferences.getBytesLength("devices");
+    uint8_t* oldData = nullptr;
+    bool needsMigration = false;
+
+    if (len == sizeof(devices)) {
         preferences.getBytes("devices", devices, sizeof(devices));
         Serial.println("Loaded Multi-Channel Device Profiles from NVRAM.");
+    } else if (len > 0 && len < sizeof(devices)) {
+        Serial.println("Migrating old Device Profiles to new format...");
+        oldData = new uint8_t[len];
+        preferences.getBytes("devices", oldData, len);
+        needsMigration = true;
     } else {
         Serial.println("No Device Profiles in config. Using empty array.");
         memset(devices, 0, sizeof(devices));
     }
-
     preferences.end();
-    ioNode.loadProfiles(devices, 5);
+
+    if (needsMigration) {
+        size_t oldProfileSize = len / 5;
+        memset(devices, 0, sizeof(devices));
+        for (int i = 0; i < 5; i++) {
+            memcpy(&devices[i], oldData + (i * oldProfileSize), oldProfileSize);
+        }
+        delete[] oldData;
+        ioNode.loadProfiles(devices, 5); // Load into RAM before save
+        saveConfiguration(); // Save new format
+    } else {
+        ioNode.loadProfiles(devices, 5);
+    }
 
     // Print the loaded keys and MACs to the console
     int activeCount = 0;
@@ -70,8 +92,9 @@ void loadConfiguration() {
     for (int i = 0; i < 5; i++) {
         if (devices[i].active) {
             activeCount++;
-            Serial.printf("Slot %d: Source MAC: %02X%02X%02X | Dest MAC: %02X%02X%02X | Seq: %u\n",
+            Serial.printf("Slot %d: [%s] Source MAC: %02X%02X%02X | Dest MAC: %02X%02X%02X | Seq: %u\n",
                 i + 1,
+                strlen(devices[i].description) > 0 ? devices[i].description : "Unnamed",
                 devices[i].sourceMac.n0, devices[i].sourceMac.n1, devices[i].sourceMac.n2,
                 devices[i].destMac.n0, devices[i].destMac.n1, devices[i].destMac.n2,
                 devices[i].seqCounter);

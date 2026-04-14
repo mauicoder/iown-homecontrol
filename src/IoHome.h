@@ -128,6 +128,7 @@ struct IoHomeProfile {
     uint8_t stackKey[16];
     uint16_t seqCounter;
     bool active;
+    char description[32];
 };
 
 /*!

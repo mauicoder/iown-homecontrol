@@ -39,6 +39,8 @@ volatile uint8_t webCommandDevice = 0;
 volatile bool isProvisioning = false;
 
 extern IoHomeProfile devices[5]; // Access the globally enrolled devices
+extern IoHomeNode ioNode; // Needed to update the active profile in RAM
+extern void saveConfiguration(); // Needed to write changes to NVRAM
 
 IoHomeWebSniffer::IoHomeWebSniffer() : _server(80) {}
 
@@ -85,13 +87,15 @@ void IoHomeWebSniffer::handleRoot() {
     for (int i = 0; i < 5; i++) {
         if (devices[i].active) {
             activeCount++;
-            char buf[512];
+            char buf[1024];
             snprintf(buf, sizeof(buf),
-                "<b>Channel %d (Src: %02X%02X%02X, Dest: %02X%02X%02X):</b><br>"
+                "<b>Channel %d:</b> <input type='text' id='desc_%d' value='%s' maxlength='31' placeholder='Unnamed Device'> "
+                "<button class=\"btn-small\" onclick=\"fetch('/name?d=%d&n='+encodeURIComponent(document.getElementById('desc_%d').value))\">Save Name</button><br>"
+                "<span style='font-size:12px;color:#aaa;'>Src: %02X%02X%02X | Dest: %02X%02X%02X</span><br>"
                 "<button class=\"btn\" onclick=\"fetch('/cmd?c=U&d=%d')\">UP</button>"
                 "<button class=\"btn\" onclick=\"fetch('/cmd?c=S&d=%d')\">MY</button>"
                 "<button class=\"btn\" onclick=\"fetch('/cmd?c=D&d=%d')\">DOWN</button><br><br>",
-                i + 1,
+                i + 1, i, devices[i].description, i, i,
                 devices[i].sourceMac.n0, devices[i].sourceMac.n1, devices[i].sourceMac.n2,
                 devices[i].destMac.n0, devices[i].destMac.n1, devices[i].destMac.n2,
                 i, i, i);
@@ -106,6 +110,9 @@ void IoHomeWebSniffer::handleRoot() {
     <style>body{font-family: monospace; background: #121212; color: #0f0; padding: 20px;} .pkt{border-bottom: 1px solid #333; padding: 5px; margin-bottom: 5px;}
     .btn{background:#333;color:#0f0;border:1px solid #0f0;padding:12px 24px;margin:5px;cursor:pointer;font-family:monospace;font-size:16px;font-weight:bold;}
     .btn:hover{background:#0f0;color:#121212;}
+    .btn-small{background:#333;color:#0f0;border:1px solid #0f0;padding:4px 8px;cursor:pointer;font-family:monospace;font-weight:bold;}
+    .btn-small:hover{background:#0f0;color:#121212;}
+    input[type=text]{background:#222;color:#0f0;border:1px solid #0f0;padding:4px;font-family:monospace;margin-right:5px;}
     .controls{margin-bottom: 20px; padding-bottom: 20px; border-bottom: 2px solid #0f0;}
     </style>
     </head><body><h2>IoHome Packet Sniffer</h2>
@@ -137,6 +144,19 @@ void IoHomeWebSniffer::begin() {
             webCommandTarget = _server.arg("c")[0];
         }
         _server.send(200, "text/plain", "Command Queued");
+    });
+    _server.on("/name", [this]() {
+        if (_server.hasArg("d") && _server.hasArg("n")) {
+            uint8_t devIdx = _server.arg("d").toInt();
+            if (devIdx < 5) {
+                String n = _server.arg("n");
+                strncpy(ioNode.getProfiles()[devIdx].description, n.c_str(), 31);
+                ioNode.getProfiles()[devIdx].description[31] = '\0';
+                saveConfiguration(); // Syncs ioNode -> devices array -> NVRAM
+                Serial.printf("\n>>> UPDATED NAME FOR CH %d to '%s' <<<\n", devIdx + 1, ioNode.getProfiles()[devIdx].description);
+            }
+        }
+        _server.send(200, "text/plain", "Name Saved");
     });
     _server.begin();
 }
