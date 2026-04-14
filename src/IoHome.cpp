@@ -12,43 +12,15 @@
 
 IoHomeNode::IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel_param)
   : _phyLayer(phy),
-    _channel(channel_param),
-    _source_node_id({0, 0, 0}),      // Initialize NodeIDs to zero
-    _destination_node_id({0, 0, 0}),
-    _sequence_counter(0) {           // Ensure counter starts at 0
-
-    // Initialize security keys with zeros to avoid garbage memory
-    std::fill(std::begin(_stack_key), std::end(_stack_key), 0x00);
-    std::fill(std::begin(_system_key), std::end(_system_key), 0x00);
+    _channel(channel_param) {
+    memset(_profiles, 0, sizeof(_profiles));
 }
 
-int16_t IoHomeNode::begin(const IoHomeChannel_t* channel,
-                         NodeId source_node_id,
-                         NodeId destination_node_id,
-                         uint8_t* stack_key,
-                         uint8_t* system_key) {
-    // 1. Core Data Setup (Keep this - it's protocol logic)
-    this->_channel = channel;
-    this->_source_node_id = source_node_id;
-    this->_destination_node_id = destination_node_id;
-
-    if (stack_key != nullptr) {
-        std::copy(stack_key, stack_key + 16, this->_stack_key);
+void IoHomeNode::loadProfiles(IoHomeProfile* profiles, size_t count) {
+    _numProfiles = std::min(count, (size_t)5);
+    for(size_t i = 0; i < _numProfiles; i++) {
+        _profiles[i] = profiles[i];
     }
-    if (system_key != nullptr) {
-        std::copy(system_key, system_key + 16, this->_system_key);
-    }
-
-    // 2. Hardware Safety Check
-    if (this->_phyLayer == nullptr || this->_channel == nullptr) {
-        return RADIOLIB_ERR_CHIP_NOT_FOUND;
-    }
-
-    // --- STRIPPED HARDWARE CALLS ---
-    // We NO LONGER call setFrequency, setBitRate, or setSyncWord here.
-    // We assume the HAL (main.cpp) has already prepared the radio.
-
-    return RADIOLIB_ERR_NONE;
 }
 
 uint16_t IoHomeNode::crc16(const uint8_t* data, size_t length) {
@@ -61,8 +33,8 @@ bool IoHomeNode::validateFrameCrc(const uint8_t* frame, size_t frameLength) {
 
 std::vector<uint8_t> IoHomeNode::buildFrame(
   uint8_t ctrlByte0, uint8_t ctrlByte1,
-  NodeId sourceMac, NodeId destMac,
-  uint8_t commandId, const std::vector<uint8_t>& payload
+  uint8_t commandId, const std::vector<uint8_t>& payload,
+  IoHomeProfile& profile
 ) {
   // 1. Use your new Layer 3 constants for clarity
   const size_t headerLen = IOHOME_FRAME_HEADER_LEN;    // 8
@@ -94,8 +66,8 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   frame[offset++] = ctrlByte1;
 
   // MACs
-  frame[offset++] = destMac.n0;   frame[offset++] = destMac.n1;   frame[offset++] = destMac.n2;
-  frame[offset++] = sourceMac.n0; frame[offset++] = sourceMac.n1; frame[offset++] = sourceMac.n2;
+  frame[offset++] = profile.destMac.n0;   frame[offset++] = profile.destMac.n1;   frame[offset++] = profile.destMac.n2;
+  frame[offset++] = profile.sourceMac.n0; frame[offset++] = profile.sourceMac.n1; frame[offset++] = profile.sourceMac.n2;
 
   // Command
   frame[offset++] = commandId;
@@ -109,8 +81,8 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   // --- SECURITY FOOTER SECTION (Layer 3) ---
 
   // A: Insert the 2-byte Rolling Counter (Big Endian: High Byte, then Low Byte)
-  frame[offset++] = (uint8_t)((this->_sequence_counter >> 8) & 0xFF); // High Byte
-  frame[offset++] = (uint8_t)(this->_sequence_counter & 0xFF);        // Low Byte
+  frame[offset++] = (uint8_t)((profile.seqCounter >> 8) & 0xFF); // High Byte
+  frame[offset++] = (uint8_t)(profile.seqCounter & 0xFF);        // Low Byte
 
   // --- LAYER 3: AES-128 MAC (Message Authentication Code) ---
   uint8_t output_block[16] = {0};
@@ -120,7 +92,7 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   tempFrame.commandId = commandId;
   tempFrame.payload = payload;
 
-  IoHomeCrypto::generateMac(tempFrame, frame.data(), this->_sequence_counter, this->_stack_key, output_block);
+  IoHomeCrypto::generateMac(tempFrame, frame.data(), profile.seqCounter, profile.stackKey, output_block);
 
   // 4. Extract 6 bytes and insert into frame
   for (int i = 0; i < IOHOME_SECURITY_MAC_LEN; i++) {
@@ -133,7 +105,7 @@ std::vector<uint8_t> IoHomeNode::buildFrame(
   frame[offset++] = (uint8_t)(calculatedCrc & 0xFF);
   frame[offset++] = (uint8_t)((calculatedCrc >> 8) & 0xFF);
   // Increment internal state
-  this->_sequence_counter++;
+  profile.seqCounter++;
 
   return frame;
 }
@@ -147,9 +119,23 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
         return false;
     }
 
+    // --- FIND MATCHING PROFILE ---
+    IoHomeProfile* activeProfile = nullptr;
+    for (size_t i = 0; i < _numProfiles; i++) {
+        if (_profiles[i].active &&
+            _profiles[i].sourceMac.n0 == parsedFrame.sourceMac.n0 &&
+            _profiles[i].sourceMac.n1 == parsedFrame.sourceMac.n1 &&
+            _profiles[i].sourceMac.n2 == parsedFrame.sourceMac.n2) {
+            activeProfile = &_profiles[i];
+            break;
+        }
+    }
+
     // --- KEY TRANSFER (0x30) INTERCEPTION ---
-    uint8_t active_mac_key[16];
-    std::copy(this->_stack_key, this->_stack_key + 16, active_mac_key);
+    uint8_t active_mac_key[16] = {0};
+    if (activeProfile) {
+        std::copy(activeProfile->stackKey, activeProfile->stackKey + 16, active_mac_key);
+    }
 
     if (parsedFrame.commandId == 0x30 && parsedFrame.payload.size() >= 16) {
         uint8_t extracted_key[16];
@@ -182,10 +168,10 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     }
 
     // --- Keep ESP32 Sequence Counter in Sync! ---
-    // To successfully spoof the remote, our sequence counter must be strictly greater
-    // than the last counter the awning received.
-    if (rxCounter >= this->_sequence_counter || this->_sequence_counter == 0) {
-        this->_sequence_counter = rxCounter + 1;
+    if (activeProfile) {
+        if (rxCounter >= activeProfile->seqCounter || activeProfile->seqCounter == 0) {
+            activeProfile->seqCounter = rxCounter + 1;
+        }
     }
 
     // Success
@@ -193,17 +179,25 @@ bool IoHomeNode::parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFram
     return true;
 }
 
-int16_t IoHomeNode::sendButton(uint16_t buttonAction) {
+int16_t IoHomeNode::sendButton(uint16_t buttonAction, uint8_t profileIndex) {
+    if (profileIndex >= _numProfiles) return RADIOLIB_ERR_INVALID_NUM_SAMPLES;
+    IoHomeProfile& profile = _profiles[profileIndex];
+
     int16_t state = RADIOLIB_ERR_NONE;
-    bool useBroadcast = (_destination_node_id.n0 == 0 && _destination_node_id.n1 == 0 && _destination_node_id.n2 == 0);
+    bool useBroadcast = (profile.destMac.n0 == 0 && profile.destMac.n1 == 0 && profile.destMac.n2 == 0);
+
+    NodeId originalDest = profile.destMac;
 
     // 1. WAKE-UP / BROADCAST FRAME
     // Multi-channel remotes (like Situo 5) always start a sequence with a generic 6-byte broadcast.
     // This wakes up sleeping awnings and informs smart hubs (like TaHoma) of the action.
-    NodeId broadcastMac = {0x00, 0x00, 0x3F};
+    profile.destMac = {0x00, 0x00, 0x3F};
     std::vector<uint8_t> broadcastPayload = { 0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x00, 0x00 };
-    std::vector<uint8_t> broadcastFrame = this->buildFrame(0xF0, 0x00, this->_source_node_id, broadcastMac, IOHOME_CMD_0x00, broadcastPayload);
+    std::vector<uint8_t> broadcastFrame = this->buildFrame(0xF0, 0x00, IOHOME_CMD_0x00, broadcastPayload, profile);
     state = this->transmitFrame(broadcastFrame);
+
+    // Restore original destination MAC
+    profile.destMac = originalDest;
 
     // 2. TARGETED EXECUTION FRAME
     // After waking up the network, the remote sends the actual targeted execution command
@@ -215,7 +209,7 @@ int16_t IoHomeNode::sendButton(uint16_t buttonAction) {
         } else {
             targetedPayload = {0x01, 0x43, (uint8_t)(buttonAction >> 8), (uint8_t)(buttonAction & 0xFF), 0x80, 0xC8, 0x00, 0x00};
         }
-        std::vector<uint8_t> targetedFrame = this->buildFrame(0xF0, 0x00, this->_source_node_id, this->_destination_node_id, IOHOME_CMD_0x00, targetedPayload);
+        std::vector<uint8_t> targetedFrame = this->buildFrame(0xF0, 0x00, IOHOME_CMD_0x00, targetedPayload, profile);
         state = this->transmitFrame(targetedFrame);
     }
 
@@ -302,33 +296,4 @@ int16_t IoHomeNode::transmitFrame(const std::vector<uint8_t>& frame) {
     }
 #endif
     return state;
-}
-
-int16_t IoHomeNode::sendWink(NodeId targetMac) {
-    // 0x10 = Standard 1-way / 2-way control bits (adjust as needed)
-    // 0x01 = Specific control flags
-    uint8_t ctrl0 = 0x10;
-    uint8_t ctrl1 = 0x01;
-    uint8_t commandId = 0x20; // The "Wink" Command
-
-    // Empty payload for a standard Wink
-    std::vector<uint8_t> emptyPayload;
-
-    // Generate the cryptographically signed frame
-    std::vector<uint8_t> frame = this->buildFrame(
-        ctrl0,
-        ctrl1,
-        this->_source_node_id,
-        targetMac,
-        commandId,
-        emptyPayload
-    );
-
-#if defined(ARDUINO) && defined(DEBUG_IOHOME)
-    Serial.printf("[IoHomeNode] Sending WINK to %02X%02X%02X\n",
-                  targetMac.n0, targetMac.n1, targetMac.n2);
-#endif
-
-    // Send it over the radio
-    return this->transmitFrame(frame);
 }

@@ -45,11 +45,7 @@ IoHomeChannel_t ioHomeChannel = { .c0 = IOHOME_CHAN_C0, .c1 = IOHOME_CHAN_C1 };
 uint32_t validPacketCount = 0;
 Preferences preferences;
 
-// Default to zeroed keys/addresses. Will be loaded from NVRAM on boot.
-NodeId sourceNodeId = {0x00, 0x00, 0x00};
-NodeId destNodeId = {0x00, 0x00, 0x00};
-uint8_t stackKey[16] = {0};
-uint8_t systemKey[16] = {0};
+IoHomeProfile devices[5];
 IoHomeNode ioNode(BoardHAL::radio, &ioHomeChannel);
 IoHomeWebSniffer webSniffer;
 
@@ -57,54 +53,27 @@ IoHomeWebSniffer webSniffer;
 void loadConfiguration() {
     preferences.begin("iohome", true); // true = read-only mode
 
-    if (preferences.getBytesLength("sourceNode") == sizeof(NodeId)) {
-        preferences.getBytes("sourceNode", &sourceNodeId, sizeof(NodeId));
-        Serial.printf("Loaded NodeID: %02X%02X%02X\n", sourceNodeId.n0, sourceNodeId.n1, sourceNodeId.n2);
+    if (preferences.getBytesLength("devices") == sizeof(devices)) {
+        preferences.getBytes("devices", devices, sizeof(devices));
+        Serial.println("Loaded Multi-Channel Device Profiles from NVRAM.");
     } else {
-        Serial.println("No NodeID in config. Using defaults.");
-    }
-
-    if (preferences.getBytesLength("destNode") == sizeof(NodeId)) {
-        preferences.getBytes("destNode", &destNodeId, sizeof(NodeId));
-    }
-
-    if (preferences.getBytesLength("stackKey") == 16) {
-        preferences.getBytes("stackKey", stackKey, 16);
-        Serial.println("Loaded 16-byte Stack Key from config.");
-    } else {
-        Serial.println("No Stack Key in config. Using defaults.");
-    }
-
-    if (preferences.getBytesLength("seqCounter") == sizeof(uint16_t)) {
-        uint16_t sc = 0;
-        preferences.getBytes("seqCounter", &sc, sizeof(uint16_t));
-        ioNode.setSequenceCounter(sc);
-        Serial.printf("Loaded Sequence Counter: 0x%04X\n", sc);
+        Serial.println("No Device Profiles in config. Using empty array.");
+        memset(devices, 0, sizeof(devices));
     }
 
     preferences.end();
+    ioNode.loadProfiles(devices, 5);
 }
 
-void saveConfiguration(NodeId srcNode, NodeId dstNode, const uint8_t* newKey) {
+void saveConfiguration() {
+    // Sync active state from ioNode to catch counter increments
+    memcpy(devices, ioNode.getProfiles(), sizeof(devices));
+
     preferences.begin("iohome", false); // false = read/write mode
-    preferences.putBytes("sourceNode", &srcNode, sizeof(NodeId));
-    preferences.putBytes("destNode", &dstNode, sizeof(NodeId));
-    preferences.putBytes("stackKey", newKey, 16);
+    preferences.putBytes("devices", devices, sizeof(devices));
     preferences.end();
-
-    // Update active RAM variables
-    sourceNodeId = srcNode;
-    destNodeId = dstNode;
-    memcpy(stackKey, newKey, 16);
-    Serial.println("Configuration successfully saved to NVRAM!");
 }
 
-void saveSequenceCounter(uint16_t counter) {
-    preferences.begin("iohome", false);
-    preferences.putBytes("seqCounter", &counter, sizeof(uint16_t));
-    preferences.end();
-    Serial.printf("    >>> SEQUENCE COUNTER SAVED: 0x%04X <<<\n", counter);
-}
 
 // --- PERSISTENT STATE MACHINE PARSER ---
 class IoHomeStreamParser {
@@ -193,6 +162,7 @@ public:
 IoHomeStreamParser streamParser;
 
 extern volatile char webCommandTarget; // Hook into the Web Sniffer commands
+extern volatile uint8_t webCommandDevice;
 
 void setup() {
   // 1. HARDWARE INIT
@@ -233,14 +203,7 @@ void setup() {
     }
     Serial.println(F("Radio is LISTENING."));
 
-    // 6. INITIALIZE IOHOME LIBRARY
-    Serial.print(F("Initializing IoHomeNode... "));
-    int state = ioNode.begin(&ioHomeChannel, sourceNodeId, destNodeId, stackKey, systemKey);
-    if (state == RADIOLIB_ERR_NONE) {
-        Serial.println(F("SUCCESS"));
-    } else {
-        Serial.printf("FAILED (Error: %d)\n", state);
-    }
+    Serial.println(F("IoHomeNode initialized with multi-profile support."));
 
     // Display Ready State
     BoardHAL::display.clearBuffer();
@@ -350,10 +313,26 @@ void loop() {
               }
               Serial.println();
 
-              saveConfiguration(parsedFrame.sourceMac, destNodeId, extracted_key);
-
-              // Reload the IoHomeNode with the new keys immediately
-              ioNode.begin(&ioHomeChannel, sourceNodeId, destNodeId, stackKey, systemKey);
+            // Find existing slot or open slot
+            int slot = -1;
+            for (int i=0; i<5; i++) {
+                if (devices[i].active && memcmp(&devices[i].sourceMac, &parsedFrame.sourceMac, 3) == 0) { slot = i; break; }
+            }
+            if (slot == -1) {
+                for (int i=0; i<5; i++) {
+                    if (!devices[i].active) { slot = i; break; }
+                }
+            }
+            if (slot != -1) {
+                devices[slot].active = true;
+                devices[slot].sourceMac = parsedFrame.sourceMac;
+                memcpy(devices[slot].stackKey, extracted_key, 16);
+                ioNode.loadProfiles(devices, 5); // Load into RAM
+                saveConfiguration(); // Save to NVRAM
+                Serial.printf("    >>> SAVED KEY TO CHANNEL SLOT %d <<<\n", slot + 1);
+            } else {
+                Serial.println("    >>> NO EMPTY PROFILE SLOTS AVAILABLE! <<<");
+            }
           }
 
           // Decode 0x00 Execute Function payloads to see the button presses
@@ -375,17 +354,22 @@ void loop() {
 
           // Automatically learn the targeted Awning's address from authenticated 0x00 commands
           if (parsedFrame.commandId == 0x00 && isAuth && parsedFrame.destMac.n2 != 0x3F) {
-              if (parsedFrame.destMac.n0 != destNodeId.n0 || parsedFrame.destMac.n1 != destNodeId.n1 || parsedFrame.destMac.n2 != destNodeId.n2) {
-                  Serial.printf("    >>> TARGET DEVICE DETECTED (%02X%02X%02X)! SAVING TO NVRAM <<<\n",
-                                parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
-                  saveConfiguration(sourceNodeId, parsedFrame.destMac, stackKey);
-                  ioNode.begin(&ioHomeChannel, sourceNodeId, destNodeId, stackKey, systemKey);
-              }
+            for (int i=0; i<5; i++) {
+                if (devices[i].active && memcmp(&devices[i].sourceMac, &parsedFrame.sourceMac, 3) == 0) {
+                    if (memcmp(&devices[i].destMac, &parsedFrame.destMac, 3) != 0) {
+                        Serial.printf("    >>> TARGET DEVICE DETECTED (%02X%02X%02X) ON CH %d! SAVING TO NVRAM <<<\n",
+                                      parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2, i + 1);
+                        ioNode.getProfiles()[i].destMac = parsedFrame.destMac;
+                        saveConfiguration();
+                    }
+                    break;
+                }
+            }
           }
 
-          // Automatically sync the Sequence Counter to NVRAM so we don't lose it on reboot
+        // Always sync configuration if authorized, so we save the sequence counter increments processed inside parseFrame
           if (isAuth) {
-              saveSequenceCounter(ioNode.getSequenceCounter());
+            saveConfiguration();
           }
 
           // Update OLED
@@ -427,36 +411,63 @@ void loop() {
 
   // --- 3. SERIAL INTERACTION (User Commands) ---
   if (Serial.available() > 0 || webCommandTarget != 0) {
-      char c;
+      char c = 0;
+      uint8_t targetDevice = 0; // Default to Slot 1 for serial input
+      bool execute = false;
+
       if (webCommandTarget != 0) {
           c = webCommandTarget;
+          targetDevice = webCommandDevice;
           webCommandTarget = 0; // Clear the flag after reading
+          execute = true;
       } else {
-          c = Serial.read();
-          // Flush trailing newlines
-          while(Serial.available() > 0 && (Serial.peek() == '\n' || Serial.peek() == '\r')) Serial.read();
+          static String serialBuf = "";
+          while (Serial.available() > 0) {
+              char inChar = Serial.read();
+              if (inChar == '\n' || inChar == '\r') {
+                  if (serialBuf.length() > 0) {
+                      c = serialBuf[0];
+                      if (serialBuf.length() > 1 && serialBuf[1] >= '1' && serialBuf[1] <= '5') {
+                          targetDevice = serialBuf[1] - '1';
+                      }
+                      serialBuf = ""; // Clear buffer
+                      execute = true;
+                  }
+              } else {
+                  serialBuf += inChar;
+                  // Auto-execute if 2 characters are typed (e.g. "U2") without pressing Enter
+                  if (serialBuf.length() == 2) {
+                      c = serialBuf[0];
+                      if (serialBuf[1] >= '1' && serialBuf[1] <= '5') {
+                          targetDevice = serialBuf[1] - '1';
+                      }
+                      serialBuf = ""; // Clear buffer
+                      execute = true;
+                  }
+              }
+          }
       }
 
-      if (c == 'U' || c == 'u' || c == 'D' || c == 'd' || c == 'S' || c == 's' || c == 'm' || c == 'M') {
+      if (execute && (c == 'U' || c == 'u' || c == 'D' || c == 'd' || c == 'S' || c == 's' || c == 'm' || c == 'M')) {
           BoardHAL::radio->standby(); // Pause receiving to free up the radio chip
           int16_t state = RADIOLIB_ERR_NONE;
 
           if (c == 'U' || c == 'u') {
-              Serial.println("\n>>> USER COMMAND: SENDING 'UP' <<<");
-              state = ioNode.sendButton(IOHOME_ACTION_UP);
+              Serial.printf("\n>>> USER COMMAND: SENDING 'UP' ON CH %d <<<\n", targetDevice + 1);
+              state = ioNode.sendButton(IOHOME_ACTION_UP, targetDevice);
           } else if (c == 'D' || c == 'd') {
-              Serial.println("\n>>> USER COMMAND: SENDING 'DOWN' <<<");
-              state = ioNode.sendButton(IOHOME_ACTION_DOWN);
+              Serial.printf("\n>>> USER COMMAND: SENDING 'DOWN' ON CH %d <<<\n", targetDevice + 1);
+              state = ioNode.sendButton(IOHOME_ACTION_DOWN, targetDevice);
           } else {
-              Serial.println("\n>>> USER COMMAND: SENDING 'MY/STOP' <<<");
-              state = ioNode.sendButton(IOHOME_ACTION_MY);
+              Serial.printf("\n>>> USER COMMAND: SENDING 'MY/STOP' ON CH %d <<<\n", targetDevice + 1);
+              state = ioNode.sendButton(IOHOME_ACTION_MY, targetDevice);
           }
 
           if (state == RADIOLIB_ERR_NONE) Serial.println("    >>> TRANSMISSION SUCCESSFUL <<<");
           else Serial.printf("    >>> TRANSMISSION FAILED (Code: %d) <<<\n", state);
 
-          // Save the incremented counter after we transmit
-          saveSequenceCounter(ioNode.getSequenceCounter());
+          // Save the incremented counter for the active profile
+          saveConfiguration();
 
           BoardHAL::startReceive(); // Resume listening mode
 

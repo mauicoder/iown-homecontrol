@@ -122,6 +122,14 @@ struct IoHomeFrame_t {
   bool isValid = false; // Indicates if the frame was successfully parsed and CRC validated
 };
 
+struct IoHomeProfile {
+    NodeId sourceMac;
+    NodeId destMac;
+    uint8_t stackKey[16];
+    uint16_t seqCounter;
+    bool active;
+};
+
 /*!
   \class IoHomeNode
   \brief io-homecontrol node.
@@ -130,11 +138,8 @@ class IoHomeNode {
   public:
     IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel);
 
-    int16_t begin(const IoHomeChannel_t* channel,
-               NodeId source_node_id,
-               NodeId destination_node_id,
-               uint8_t* stack_key,
-               uint8_t* system_key);
+    void loadProfiles(IoHomeProfile* profiles, size_t count);
+    IoHomeProfile* getProfiles() { return _profiles; }
 
     int16_t transmitFrame(const std::vector<uint8_t>& frame);
 
@@ -143,18 +148,14 @@ class IoHomeNode {
 
     std::vector<uint8_t> buildFrame(
       uint8_t ctrlByte0, uint8_t ctrlByte1,
-      NodeId sourceMac, NodeId destMac,
-      uint8_t commandId, const std::vector<uint8_t>& payload
+      uint8_t commandId, const std::vector<uint8_t>& payload,
+      IoHomeProfile& profile
     );
 
     bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
 
     // Commands
-    uint16_t getSequenceCounter() const { return _sequence_counter; }
-    void setSequenceCounter(uint16_t counter) { _sequence_counter = counter; }
-
-    int16_t sendWink(NodeId targetMac);
-    int16_t sendButton(uint16_t buttonAction);
+    int16_t sendButton(uint16_t buttonAction, uint8_t profileIndex);
 
     // Template helpers (Must be in header)
     template<typename T>
@@ -182,14 +183,8 @@ class IoHomeNode {
     PhysicalLayer* _phyLayer;
     const IoHomeChannel_t* _channel;
 
-    NodeId _source_node_id;
-    NodeId _destination_node_id;
-
-    uint8_t _stack_key[16];
-    uint8_t _system_key[16];
-
-    // Counter for the Security Layer (u2 counter in .ksy)
-    uint16_t _sequence_counter = 0;
+    IoHomeProfile _profiles[5];
+    size_t _numProfiles = 0;
 }; // <--- This closes the class
 
 #endif // <--- This closes the header guard

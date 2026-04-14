@@ -2,6 +2,7 @@
 #include "IoHome.h"
 
 volatile char webCommandTarget = 0; // Global variable to pass web commands to the main loop
+volatile uint8_t webCommandDevice = 0;
 
 IoHomeWebSniffer::IoHomeWebSniffer() : _server(80) {}
 
@@ -32,9 +33,14 @@ void IoHomeWebSniffer::handleRoot() {
     </style>
     </head><body><h2>IoHome Packet Sniffer</h2>
     <div class="controls">
-        <button class="btn" onclick="fetch('/cmd?c=U')">UP / OPEN</button>
-        <button class="btn" onclick="fetch('/cmd?c=S')">MY / STOP</button>
-        <button class="btn" onclick="fetch('/cmd?c=D')">DOWN / CLOSE</button>
+        <b>Channel 1:</b>
+        <button class="btn" onclick="fetch('/cmd?c=U&d=0')">UP</button>
+        <button class="btn" onclick="fetch('/cmd?c=S&d=0')">MY</button>
+        <button class="btn" onclick="fetch('/cmd?c=D&d=0')">DOWN</button><br>
+        <b>Channel 2:</b>
+        <button class="btn" onclick="fetch('/cmd?c=U&d=1')">UP</button>
+        <button class="btn" onclick="fetch('/cmd?c=S&d=1')">MY</button>
+        <button class="btn" onclick="fetch('/cmd?c=D&d=1')">DOWN</button>
     </div><p>Waiting for packets...</p><div id="log"></div>
     <script>setInterval(() => { fetch('/packets').then(r => r.text()).then(t => {
     if(t) document.getElementById('log').innerHTML = t + document.getElementById('log').innerHTML;
@@ -56,6 +62,9 @@ void IoHomeWebSniffer::begin() {
     _server.on("/packets", [this]() { handlePackets(); });
     _server.on("/cmd", [this]() {
         if (_server.hasArg("c")) {
+            if (_server.hasArg("d")) {
+                webCommandDevice = _server.arg("d").toInt();
+            }
             webCommandTarget = _server.arg("c")[0];
         }
         _server.send(200, "text/plain", "Command Queued");
