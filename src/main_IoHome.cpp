@@ -10,6 +10,7 @@
 #include "IoHomeParser.h"
 #include "IoHomeCrypto.h"
 #include "IoHomeWebSniffer.h"
+#include "IoHomeStreamParser.h"
 #include "hal/BoardHAL.h" // Include the hardware abstraction layer for board-specific configurations
 #include <WiFiProv.h>
 #include <qrcode.h>
@@ -56,6 +57,14 @@ IoHomeWebSniffer webSniffer;
 void saveConfiguration(); // Forward declaration
 void saveMqttConfiguration(); // Forward declaration
 void updateDisplay(); // Forward declaration
+
+// --- Loop Logic Functions ---
+void handleMqttAndWeb();
+void handleDisplayUpdates();
+void handleWifiHealing();
+void handleChannelHopping();
+void handleReceivedPacket();
+void handleUserCommands();
 
 MqttConfig mqttConfig;
 volatile bool isProvisioning = false;
@@ -247,90 +256,6 @@ void sysProvEvent(arduino_event_t *sys_event) {
     }
 }
 
-// --- PERSISTENT STATE MACHINE PARSER ---
-class IoHomeStreamParser {
-private:
-    static const size_t BUFFER_SIZE = 1024;
-    uint8_t buffer[BUFFER_SIZE];
-    size_t length = 0;
-
-    int frameBit = 0; // 0: wait for start, 1..8: data, 9: stop
-    uint16_t currentData = 0;
-
-    void consume(size_t count) {
-        if (count >= length) {
-            length = 0;
-        } else {
-            size_t remaining = length - count;
-            memmove(buffer, buffer + count, remaining);
-            length = remaining;
-        }
-    }
-
-public:
-    void pushBytes(const uint8_t* bytes, size_t len) {
-        for (size_t i = 0; i < len; i++) {
-            for (int b = 7; b >= 0; b--) {
-                uint8_t bit = (bytes[i] >> b) & 0x01;
-                if (frameBit == 0) {
-                    if (bit == 0) { // Found Start bit (0)
-                        frameBit = 1;
-                        currentData = 0;
-                    }
-                } else if (frameBit >= 1 && frameBit <= 8) {
-                    currentData |= (bit << (frameBit - 1)); // LSB first
-                    frameBit++;
-                } else if (frameBit == 9) {
-                    if (bit == 1) { // Valid Stop bit (1)
-                        if (length < BUFFER_SIZE) {
-                            buffer[length++] = currentData;
-                        }
-                    }
-                    frameBit = 0; // Reset for next byte
-                }
-            }
-        }
-    }
-
-    bool extractNextFrame(IoHomeNode& ioNode, IoHomeFrame_t& outFrame, bool& outAuthStatus) {
-        size_t searchIdx = 0;
-        Serial.printf(">>> Searching rolling buffer (Current length: %zu bytes)\n", length);
-
-        while (searchIdx + IOHOME_MIN_FRAME_LEN <= length) {
-            uint8_t ctrlByte = buffer[searchIdx];
-
-            // io-homecontrol MAC headers usually start with 0xFx (e.g., 0xF8, 0xF6, 0xF0)
-            if ((ctrlByte & 0xF0) == 0xF0) {
-                size_t declaredBodyLen = (ctrlByte & 0x1F) + 1;
-                size_t expectedTotalLen = declaredBodyLen + IOHOME_FRAME_CRC_LEN;
-
-                if (expectedTotalLen >= IOHOME_MIN_FRAME_LEN && expectedTotalLen <= 64) {
-                    if (searchIdx + expectedTotalLen <= length) {
-                        if (IoHomeNode::validateFrameCrc(&buffer[searchIdx], expectedTotalLen)) {
-                            outAuthStatus = ioNode.parseFrame(&buffer[searchIdx], expectedTotalLen, outFrame);
-                            consume(searchIdx + expectedTotalLen); // Remove parsed packet and preceding garbage
-                            return true; // We found one!
-                        }
-                    } else {
-                        Serial.printf("    [Parser] Found valid MAC header, but packet is split. Waiting for next chunk.\n");
-                        break; // Valid-looking header, but packet is split. Wait for next chunk.
-                    }
-                }
-            }
-            searchIdx++;
-        }
-        if (searchIdx > 0) consume(searchIdx); // Drop evaluated garbage
-        if (length > BUFFER_SIZE - 256) consume(length - 64); // Safe fallback
-        return false;
-    }
-
-    void clear() {
-        length = 0;
-        frameBit = 0;
-        currentData = 0;
-    }
-};
-
 IoHomeStreamParser streamParser;
 
 extern volatile char webCommandTarget; // Hook into the Web Sniffer commands
@@ -394,229 +319,67 @@ void setup() {
   }
 }
 
-void loop() {
-  MqttManager::loop();
-  // Handle Web Server Clients
-  webSniffer.loop();
+void handleMqttAndWeb() {
+    MqttManager::loop();
+    webSniffer.loop();
+}
 
-  // --- UPDATE DISPLAY ON STATE CHANGES OR TIMEOUTS ---
-  static bool lastMqttState = false;
-  bool currentMqttState = MqttManager::isConnected();
-  bool mqttChanged = (currentMqttState != lastMqttState);
-  if (mqttChanged) {
-      lastMqttState = currentMqttState;
-  }
-
-  static bool showingHistory = false;
-  bool shouldShowHistory = (validPacketCount > 0) && (millis() - lastPacketTime <= 10000);
-  bool historyChanged = (showingHistory != shouldShowHistory);
-  if (historyChanged) {
-      showingHistory = shouldShowHistory;
-  }
-
-  if (mqttChanged || historyChanged) {
-      updateDisplay();
-  }
-
-  // --- WIFI SELF-HEALING ---
-  // If the board has stale/dead credentials from an old project,
-  // it will try to connect forever and never show the QR code.
-  // If 15 seconds pass without connecting, wipe the dead credentials and reboot into setup mode!
-  static uint32_t wifiTimeoutTimer = millis();
-  if (!isProvisioning && WiFi.status() != WL_CONNECTED) {
-      if (millis() - wifiTimeoutTimer > 15000) {
-          Serial.println("\n>>> Wi-Fi connection timed out! Wiping dead credentials and rebooting to Setup Mode... <<<");
-          WiFi.disconnect(false, true);
-          delay(500);
-          ESP.restart();
-      }
-  } else {
-      wifiTimeoutTimer = millis(); // Reset timer while connected or provisioning
-  }
-
-  // --- 0. CHANNEL HOPPING ---
-  if (!receivedFlag && (millis() - lastHopTime >= HOP_INTERVAL_MS)) {
-    float rssi = BoardHAL::getInstantaneousRSSI();
-
-    if (rssi < RSSI_HOP_THRESHOLD) {
-      // Channel is quiet (below noise floor), hop to the next frequency
-      currentFreqIndex = (currentFreqIndex + 1) % 3;
-      targetFreq = IOHOME_FREQUENCIES[currentFreqIndex];
-
-      BoardHAL::radio->standby();
-      BoardHAL::radio->setFrequency(targetFreq);
-      BoardHAL::startReceive();
-      lastHopTime = millis();
-    } else {
-      // Signal detected! Pause hopping for 20ms to allow the packet to arrive
-      lastHopTime = millis() + 20;
+void handleDisplayUpdates() {
+    static bool lastMqttState = false;
+    bool currentMqttState = MqttManager::isConnected();
+    bool mqttChanged = (currentMqttState != lastMqttState);
+    if (mqttChanged) {
+        lastMqttState = currentMqttState;
     }
-  }
 
+    static bool showingHistory = false;
+    bool shouldShowHistory = (validPacketCount > 0) && (millis() - lastPacketTime <= 10000);
+    bool historyChanged = (showingHistory != shouldShowHistory);
+    if (historyChanged) {
+        showingHistory = shouldShowHistory;
+    }
 
-  // --- 2. IOHOME PACKET HANDLING ---
+    if (mqttChanged || historyChanged) {
+        updateDisplay();
+    }
+}
 
-  // Check if the interrupt flag has been set by the ISR
-  if (receivedFlag) {
-    // Reset the flag
-    receivedFlag = false;
-
-    // A packet was received, read it
-    size_t len = 0;
-    byte byteArr[IOHOME_MAX_FIFO_LEN] = {0};
-    int state = BoardHAL::readData(byteArr, len);
-
-    if (state == RADIOLIB_ERR_NONE) {
-      // Packet was read successfully
-      Serial.print(F("[RAW] Received packet! RSSI: "));
-      Serial.print(BoardHAL::radio->getRSSI());
-      Serial.print(F(" | Length: "));
-      Serial.println((int)len);
-
-      // Print the raw data as hex
-      Serial.print(F("      Data: "));
-      for(int i = 0; i < len; i++) {
-        if(byteArr[i] < 0x10) {
-          Serial.print(F("0"));
+void handleWifiHealing() {
+    static uint32_t wifiTimeoutTimer = millis();
+    if (!isProvisioning && WiFi.status() != WL_CONNECTED) {
+        if (millis() - wifiTimeoutTimer > 15000) {
+            Serial.println("\n>>> Wi-Fi connection timed out! Wiping dead credentials and rebooting to Setup Mode... <<<");
+            WiFi.disconnect(false, true);
+            delay(500);
+            ESP.restart();
         }
-        Serial.print(byteArr[i], HEX);
-        Serial.print(F(" "));
-      }
-      Serial.println();
-
-      // Log raw bytes to the web sniffer
-      webSniffer.appendRawPacket(targetFreq, BoardHAL::radio->getRSSI(), len, byteArr);
-
-      // --- 1. CONTINUOUS STATE MACHINE DECODING ---
-      // Feed raw bits into the state machine
-      streamParser.pushBytes(byteArr, len);
-
-      // --- 2. EXTRACT MULTIPLE/SPLIT FRAMES ---
-      IoHomeFrame_t parsedFrame;
-      bool isAuth;
-      while (streamParser.extractNextFrame(ioNode, parsedFrame, isAuth)) {
-          validPacketCount++;
-          lastPacketTime = millis();
-
-          Serial.printf(">>> SUCCESSFULLY RECEIVED IOHOME FRAME #%lu (CRC OK) <<<\n", validPacketCount);
-          Serial.printf("    Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X\n",
-                parsedFrame.commandId,
-                parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
-                parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
-
-          if (!isAuth) {
-              Serial.println(F("    >>> AES MAC VERIFICATION FAILED (Or No Keys) <<<"));
-          } else {
-              Serial.println(F("    >>> AES AUTHENTICATION SUCCESSFUL <<<"));
-          }
-
-          webSniffer.appendDecodedPacket(validPacketCount, parsedFrame, isAuth);
-
-          // Automatically save 1-Way Key Transfer to NVRAM
-          if (parsedFrame.commandId == 0x30 && parsedFrame.payload.size() >= 16) {
-              uint8_t extracted_key[16];
-              IoHomeCrypto::decryptTransferKey(parsedFrame, extracted_key);
-
-              Serial.println(F("    >>> NEW 1-WAY KEY DETECTED! SAVING TO NVRAM <<<"));
-              Serial.print(F("    Extracted Key: "));
-              for (int i = 0; i < 16; i++) {
-                  Serial.printf("%02X ", extracted_key[i]);
-              }
-              Serial.println();
-
-            // Find existing slot or open slot
-            int slot = -1;
-            for (int i=0; i<5; i++) {
-                if (devices[i].active && memcmp(&devices[i].sourceMac, &parsedFrame.sourceMac, 3) == 0) { slot = i; break; }
-            }
-            if (slot == -1) {
-                for (int i=0; i<5; i++) {
-                    if (!devices[i].active) { slot = i; break; }
-                }
-            }
-            if (slot != -1) {
-                devices[slot].active = true;
-                devices[slot].sourceMac = parsedFrame.sourceMac;
-                memcpy(devices[slot].stackKey, extracted_key, 16);
-                ioNode.loadProfiles(devices, 5); // Load into RAM
-                saveConfiguration(); // Save to NVRAM
-                Serial.printf("    >>> SAVED KEY TO CHANNEL SLOT %d <<<\n", slot + 1);
-            } else {
-                Serial.println("    >>> NO EMPTY PROFILE SLOTS AVAILABLE! <<<");
-            }
-          }
-
-          // Decode 0x00 Execute Function payloads to see the button presses
-          if (parsedFrame.commandId == 0x00 && isAuth && parsedFrame.payload.size() >= 4) {
-              uint16_t action = (parsedFrame.payload[2] << 8) | parsedFrame.payload[3];
-              Serial.print("    >>> DECODED ACTION: ");
-              if (action == IOHOME_ACTION_UP) Serial.print("UP / OPEN");
-              else if (action == IOHOME_ACTION_DOWN) Serial.print("DOWN / CLOSE");
-              else if (action == IOHOME_ACTION_MY) Serial.print("MY / STOP");
-              else Serial.printf("UNKNOWN (0x%04X)", action);
-
-              if (parsedFrame.payload.size() >= 6) {
-                  uint16_t param = (parsedFrame.payload[4] << 8) | parsedFrame.payload[5];
-                  Serial.printf(" | PARAM: 0x%04X <<<\n", param);
-              } else {
-                  Serial.println(" <<<");
-              }
-          }
-
-          // Automatically learn the targeted Awning's address from authenticated 0x00 commands
-          if (parsedFrame.commandId == 0x00 && isAuth && parsedFrame.destMac.n2 != 0x3F) {
-            for (int i=0; i<5; i++) {
-                if (devices[i].active && memcmp(&devices[i].sourceMac, &parsedFrame.sourceMac, 3) == 0) {
-                    if (memcmp(&devices[i].destMac, &parsedFrame.destMac, 3) != 0) {
-                        Serial.printf("    >>> TARGET DEVICE DETECTED (%02X%02X%02X) ON CH %d! SAVING TO NVRAM <<<\n",
-                                      parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2, i + 1);
-                        ioNode.getProfiles()[i].destMac = parsedFrame.destMac;
-                        saveConfiguration();
-                    }
-                    break;
-                }
-            }
-          }
-
-        // Always sync configuration if authorized, so we save the sequence counter increments processed inside parseFrame
-          if (isAuth) {
-            saveConfiguration();
-          }
-
-          // Update OLED
-          if (!isProvisioning) {
-              if (historyCount < HISTORY_SIZE) historyCount++;
-              for (int h = HISTORY_SIZE - 1; h > 0; --h) {
-                  strncpy(packetHistory[h], packetHistory[h-1], 32);
-              }
-              snprintf(packetHistory[0], 32, "#%lu %02X%02X%02X>%02X%02X%02X %02X",
-                       validPacketCount,
-                       parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
-                       parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2,
-                       parsedFrame.commandId);
-
-              updateDisplay();
-          }
-      }
-
-    } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
-      // Packet was received, but is malformed
-      Serial.println(F("[RAW] CRC error!"));
-
     } else {
-      // Some other error occurred
-      Serial.print(F("[RAW] Receive failed, code "));
-      Serial.println(state);
+        wifiTimeoutTimer = millis(); // Reset timer while connected or provisioning
     }
+}
 
-    // Put the radio back into listening mode
-    BoardHAL::radio->standby(); // Flush SX1276 FIFO to clear stuck DIO0 interrupts
-    BoardHAL::startReceive();
-    lastHopTime = millis(); // Reset hopping timer
-  }
+void handleChannelHopping() {
+    if (!receivedFlag && (millis() - lastHopTime >= HOP_INTERVAL_MS)) {
+        float rssi = BoardHAL::getInstantaneousRSSI();
 
-  // --- 3. SERIAL INTERACTION (User Commands) ---
-  if (Serial.available() > 0 || webCommandTarget != 0) {
+        if (rssi < RSSI_HOP_THRESHOLD) {
+            // Channel is quiet (below noise floor), hop to the next frequency
+            currentFreqIndex = (currentFreqIndex + 1) % 3;
+            targetFreq = IOHOME_FREQUENCIES[currentFreqIndex];
+
+            BoardHAL::radio->standby();
+            BoardHAL::radio->setFrequency(targetFreq);
+            BoardHAL::startReceive();
+            lastHopTime = millis();
+        } else {
+            // Signal detected! Pause hopping for 20ms to allow the packet to arrive
+            lastHopTime = millis() + 20;
+        }
+    }
+}
+
+void handleUserCommands() {
+    if (Serial.available() > 0 || webCommandTarget != 0) {
       char c = 0;
       uint8_t targetDevice = 0; // Default to Slot 1 for serial input
       bool execute = false;
@@ -689,4 +452,136 @@ void loop() {
           lastHopTime = millis();
       }
   }
+}
+
+void handleReceivedPacket() {
+    // Reset the flag
+    receivedFlag = false;
+
+    // A packet was received, read it
+    size_t len = 0;
+    byte byteArr[IOHOME_MAX_FIFO_LEN] = {0};
+    int state = BoardHAL::readData(byteArr, len);
+
+    if (state == RADIOLIB_ERR_NONE) {
+        // Packet was read successfully
+        Serial.print(F("[RAW] Received packet! RSSI: "));
+        Serial.print(BoardHAL::radio->getRSSI());
+        Serial.print(F(" | Length: "));
+        Serial.println((int)len);
+
+        // Print the raw data as hex
+        Serial.print(F("      Data: "));
+        for(size_t i = 0; i < len; i++) {
+            if(byteArr[i] < 0x10) Serial.print(F("0"));
+            Serial.print(byteArr[i], HEX);
+            Serial.print(F(" "));
+        }
+        Serial.println();
+
+        webSniffer.appendRawPacket(targetFreq, BoardHAL::radio->getRSSI(), len, byteArr);
+        streamParser.pushBytes(byteArr, len);
+
+        IoHomeFrame_t parsedFrame;
+        bool isAuth;
+        while (streamParser.extractNextFrame(ioNode, parsedFrame, isAuth)) {
+            validPacketCount++;
+            lastPacketTime = millis();
+
+            Serial.printf(">>> SUCCESSFULLY RECEIVED IOHOME FRAME #%lu (CRC OK) <<<\n", validPacketCount);
+            Serial.printf("    Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X\n",
+                          parsedFrame.commandId,
+                          parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
+                          parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
+
+            if (!isAuth) Serial.println(F("    >>> AES MAC VERIFICATION FAILED (Or No Keys) <<<"));
+            else Serial.println(F("    >>> AES AUTHENTICATION SUCCESSFUL <<<"));
+
+            webSniffer.appendDecodedPacket(validPacketCount, parsedFrame, isAuth);
+
+            // Automatically save 1-Way Key Transfer to NVRAM
+            if (parsedFrame.commandId == 0x30 && parsedFrame.payload.size() >= 16) {
+                uint8_t extracted_key[16];
+                IoHomeCrypto::decryptTransferKey(parsedFrame, extracted_key);
+
+                Serial.println(F("    >>> NEW 1-WAY KEY DETECTED! SAVING TO NVRAM <<<"));
+                int slot = -1;
+                for (int i=0; i<5; i++) { if (devices[i].active && memcmp(&devices[i].sourceMac, &parsedFrame.sourceMac, 3) == 0) { slot = i; break; } }
+                if (slot == -1) { for (int i=0; i<5; i++) { if (!devices[i].active) { slot = i; break; } } }
+
+                if (slot != -1) {
+                    devices[slot].active = true;
+                    devices[slot].sourceMac = parsedFrame.sourceMac;
+                    memcpy(devices[slot].stackKey, extracted_key, 16);
+                    ioNode.loadProfiles(devices, 5);
+                    saveConfiguration();
+                    Serial.printf("    >>> SAVED KEY TO CHANNEL SLOT %d <<<\n", slot + 1);
+                } else {
+                    Serial.println("    >>> NO EMPTY PROFILE SLOTS AVAILABLE! <<<");
+                }
+            }
+
+            // Decode 0x00 Execute Function payloads
+            if (parsedFrame.commandId == 0x00 && isAuth && parsedFrame.payload.size() >= 4) {
+                uint16_t action = (parsedFrame.payload[2] << 8) | parsedFrame.payload[3];
+                Serial.print("    >>> DECODED ACTION: ");
+                if (action == IOHOME_ACTION_UP) Serial.print("UP / OPEN");
+                else if (action == IOHOME_ACTION_DOWN) Serial.print("DOWN / CLOSE");
+                else if (action == IOHOME_ACTION_MY) Serial.print("MY / STOP");
+                else Serial.printf("UNKNOWN (0x%04X)", action);
+                Serial.println(" <<<");
+            }
+
+            // Automatically learn the targeted Awning's address
+            if (parsedFrame.commandId == 0x00 && isAuth && parsedFrame.destMac.n2 != 0x3F) {
+                for (int i=0; i<5; i++) {
+                    if (devices[i].active && memcmp(&devices[i].sourceMac, &parsedFrame.sourceMac, 3) == 0) {
+                        if (memcmp(&devices[i].destMac, &parsedFrame.destMac, 3) != 0) {
+                            Serial.printf("    >>> TARGET DEVICE DETECTED (%02X%02X%02X) ON CH %d! SAVING <<<\n",
+                                          parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2, i + 1);
+                            ioNode.getProfiles()[i].destMac = parsedFrame.destMac;
+                            saveConfiguration();
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (isAuth) saveConfiguration(); // Save seq counter increments
+
+            // Update OLED
+            if (!isProvisioning) {
+                if (historyCount < HISTORY_SIZE) historyCount++;
+                for (int h = HISTORY_SIZE - 1; h > 0; --h) strncpy(packetHistory[h], packetHistory[h-1], 32);
+                snprintf(packetHistory[0], 32, "#%lu %02X%02X%02X>%02X%02X%02X %02X",
+                         validPacketCount,
+                         parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
+                         parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2,
+                         parsedFrame.commandId);
+                updateDisplay();
+            }
+        }
+    } else if (state == RADIOLIB_ERR_CRC_MISMATCH) {
+        Serial.println(F("[RAW] CRC error!"));
+    } else {
+        Serial.printf("[RAW] Receive failed, code %d\n", state);
+    }
+
+    // Put the radio back into listening mode
+    BoardHAL::radio->standby(); // Flush SX1276 FIFO to clear stuck DIO0 interrupts
+    BoardHAL::startReceive();
+    lastHopTime = millis(); // Reset hopping timer
+}
+
+void loop() {
+    handleMqttAndWeb();
+    handleDisplayUpdates();
+    handleWifiHealing();
+    handleChannelHopping();
+
+    if (receivedFlag) {
+        handleReceivedPacket();
+    }
+
+    handleUserCommands();
 }
