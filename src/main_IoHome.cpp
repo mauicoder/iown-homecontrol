@@ -5,11 +5,11 @@
 #include "MqttManager.h" // Include the MQTT Manager header
 #include <Wire.h>
 #include <mbedtls/aes.h>
-#include <Preferences.h>
 #include <U8g2lib.h>
 #include "IoHomeParser.h"
 #include "IoHomeCrypto.h"
 #include "IoHomeWebSniffer.h"
+#include "ConfigManager.h"
 #include "IoHomeStreamParser.h"
 #include "hal/BoardHAL.h" // Include the hardware abstraction layer for board-specific configurations
 #include <WiFiProv.h>
@@ -48,14 +48,10 @@ IoHomeChannel_t ioHomeChannel = { .c0 = IOHOME_CHAN_C0, .c1 = IOHOME_CHAN_C1 };
 
 uint32_t validPacketCount = 0;
 uint32_t lastPacketTime = 0;
-Preferences preferences;
 
-IoHomeProfile devices[5];
 IoHomeNode ioNode(BoardHAL::radio, &ioHomeChannel);
 IoHomeWebSniffer webSniffer;
 
-void saveConfiguration(); // Forward declaration
-void saveMqttConfiguration(); // Forward declaration
 void updateDisplay(); // Forward declaration
 
 // --- Loop Logic Functions ---
@@ -66,94 +62,7 @@ void handleChannelHopping();
 void handleReceivedPacket();
 void handleUserCommands();
 
-MqttConfig mqttConfig;
 volatile bool isProvisioning = false;
-
-// --- CONFIGURATION MANAGEMENT ---
-void loadConfiguration() {
-    preferences.begin("iohome", true); // true = read-only mode
-
-    size_t len = preferences.getBytesLength("devices");
-    uint8_t* oldData = nullptr;
-    bool needsMigration = false;
-
-    if (len == sizeof(devices)) {
-        preferences.getBytes("devices", devices, sizeof(devices));
-        Serial.println("Loaded Multi-Channel Device Profiles from NVRAM.");
-    } else if (len > 0 && len < sizeof(devices)) {
-        Serial.println("Migrating old Device Profiles to new format...");
-        oldData = new uint8_t[len];
-        preferences.getBytes("devices", oldData, len);
-        needsMigration = true;
-    } else {
-        Serial.println("No Device Profiles in config. Using empty array.");
-        memset(devices, 0, sizeof(devices));
-    }
-
-    // Load MQTT Configuration
-    size_t mqttLen = preferences.getBytesLength("mqtt");
-    if (mqttLen > 0 && mqttLen <= sizeof(MqttConfig)) {
-        preferences.getBytes("mqtt", &mqttConfig, sizeof(MqttConfig));
-        Serial.println("Loaded MQTT Configuration from NVRAM.");
-    } else {
-        memset(&mqttConfig, 0, sizeof(MqttConfig));
-        mqttConfig.port = 1883;
-        strncpy(mqttConfig.server, "homeassistant.local", sizeof(mqttConfig.server) - 1);
-        strncpy(mqttConfig.baseTopic, "iown", sizeof(mqttConfig.baseTopic) - 1);
-        Serial.println("No MQTT Configuration found. Using defaults.");
-    }
-
-    preferences.end(); // All read operations are done, close preferences.
-
-    if (needsMigration) {
-        size_t oldProfileSize = len / 5;
-        memset(devices, 0, sizeof(devices));
-        for (int i = 0; i < 5; i++) {
-            memcpy(&devices[i], oldData + (i * oldProfileSize), oldProfileSize);
-        }
-        delete[] oldData;
-        ioNode.loadProfiles(devices, 5); // Load into RAM before save
-        saveConfiguration(); // Save new format
-    } else {
-        ioNode.loadProfiles(devices, 5);
-    }
-
-    // Print the loaded keys and MACs to the console
-    int activeCount = 0;
-    Serial.println(F("\n--- ENROLLED DEVICES / KEYS ---"));
-    for (int i = 0; i < 5; i++) {
-        if (devices[i].active) {
-            activeCount++;
-            Serial.printf("Slot %d: [%s] Source MAC: %02X%02X%02X | Dest MAC: %02X%02X%02X | Seq: %u\n",
-                i + 1,
-                strlen(devices[i].description) > 0 ? devices[i].description : "Unnamed",
-                devices[i].sourceMac.n0, devices[i].sourceMac.n1, devices[i].sourceMac.n2,
-                devices[i].destMac.n0, devices[i].destMac.n1, devices[i].destMac.n2,
-                devices[i].seqCounter);
-        }
-    }
-    if (activeCount == 0) {
-        Serial.println(F("No keys enrolled yet. Use your remote to send a 1-Way Key Transfer (0x30)."));
-    }
-    Serial.printf("Total enrolled keys: %d / 5\n", activeCount);
-    Serial.println(F("-------------------------------\n"));
-}
-
-void saveConfiguration() {
-    // Sync active state from ioNode to catch counter increments
-    memcpy(devices, ioNode.getProfiles(), sizeof(devices));
-
-    preferences.begin("iohome", false); // false = read/write mode
-    preferences.putBytes("devices", devices, sizeof(devices));
-    preferences.end();
-}
-
-void saveMqttConfiguration() {
-    preferences.begin("iohome", false); // false = read/write mode
-    size_t written = preferences.putBytes("mqtt", &mqttConfig, sizeof(MqttConfig));
-    Serial.printf("[NVRAM] Saved MQTT Config: %zu bytes\n", written);
-    preferences.end();
-}
 
 // --- DISPLAY UPDATE ---
 void updateDisplay() {
@@ -178,13 +87,13 @@ void updateDisplay() {
         BoardHAL::display.drawStr(0, 45, radioBuf);
 
         String mqttStr = "MQTT: ";
-        if (strlen(mqttConfig.server) == 0) mqttStr += "Unconfigured";
+        if (strlen(ConfigManager::mqttConfig.server) == 0) mqttStr += "Unconfigured";
         else if (MqttManager::isConnected()) mqttStr += "Connected";
         else mqttStr += "Disconnected";
         BoardHAL::display.drawStr(0, 60, mqttStr.c_str());
     } else {
         char headerBuf[32];
-        const char* mState = (strlen(mqttConfig.server) == 0) ? "No Cfg" : (MqttManager::isConnected() ? "OK" : "ERR");
+        const char* mState = (strlen(ConfigManager::mqttConfig.server) == 0) ? "No Cfg" : (MqttManager::isConnected() ? "OK" : "ERR");
         snprintf(headerBuf, 32, "Rx:%lu | MQTT:%s", validPacketCount, mState);
         BoardHAL::display.drawStr(0, 12, headerBuf);
         for (int h = 0; h < historyCount; h++) {
@@ -281,8 +190,8 @@ void setup() {
   Serial.println(F("   HELTEC V3.2 IoHome NODE     "));
   Serial.println(F("==============================="));
 
-  loadConfiguration();
-  MqttManager::begin(mqttConfig);
+  ConfigManager::load(ioNode);
+  MqttManager::begin(ConfigManager::mqttConfig);
 
   // Setup WiFi Provisioning
   WiFi.onEvent(sysProvEvent);
@@ -436,7 +345,7 @@ void handleUserCommands() {
           else Serial.printf("    >>> TRANSMISSION FAILED (Code: %d) <<<\n", state);
 
           // Save the incremented counter for the active profile
-          saveConfiguration();
+          ConfigManager::saveDevices(ioNode);
 
           BoardHAL::startReceive(); // Resume listening mode
 
@@ -506,15 +415,15 @@ void handleReceivedPacket() {
 
                 Serial.println(F("    >>> NEW 1-WAY KEY DETECTED! SAVING TO NVRAM <<<"));
                 int slot = -1;
-                for (int i=0; i<5; i++) { if (devices[i].active && memcmp(&devices[i].sourceMac, &parsedFrame.sourceMac, 3) == 0) { slot = i; break; } }
-                if (slot == -1) { for (int i=0; i<5; i++) { if (!devices[i].active) { slot = i; break; } } }
+                for (int i=0; i<5; i++) { if (ConfigManager::devices[i].active && memcmp(&ConfigManager::devices[i].sourceMac, &parsedFrame.sourceMac, 3) == 0) { slot = i; break; } }
+                if (slot == -1) { for (int i=0; i<5; i++) { if (!ConfigManager::devices[i].active) { slot = i; break; } } }
 
                 if (slot != -1) {
-                    devices[slot].active = true;
-                    devices[slot].sourceMac = parsedFrame.sourceMac;
-                    memcpy(devices[slot].stackKey, extracted_key, 16);
-                    ioNode.loadProfiles(devices, 5);
-                    saveConfiguration();
+                    ConfigManager::devices[slot].active = true;
+                    ConfigManager::devices[slot].sourceMac = parsedFrame.sourceMac;
+                    memcpy(ConfigManager::devices[slot].stackKey, extracted_key, 16);
+                    ioNode.loadProfiles(ConfigManager::devices, 5);
+                    ConfigManager::saveDevices(ioNode);
                     Serial.printf("    >>> SAVED KEY TO CHANNEL SLOT %d <<<\n", slot + 1);
                 } else {
                     Serial.println("    >>> NO EMPTY PROFILE SLOTS AVAILABLE! <<<");
@@ -535,19 +444,19 @@ void handleReceivedPacket() {
             // Automatically learn the targeted Awning's address
             if (parsedFrame.commandId == 0x00 && isAuth && parsedFrame.destMac.n2 != 0x3F) {
                 for (int i=0; i<5; i++) {
-                    if (devices[i].active && memcmp(&devices[i].sourceMac, &parsedFrame.sourceMac, 3) == 0) {
-                        if (memcmp(&devices[i].destMac, &parsedFrame.destMac, 3) != 0) {
+                    if (ConfigManager::devices[i].active && memcmp(&ConfigManager::devices[i].sourceMac, &parsedFrame.sourceMac, 3) == 0) {
+                        if (memcmp(&ConfigManager::devices[i].destMac, &parsedFrame.destMac, 3) != 0) {
                             Serial.printf("    >>> TARGET DEVICE DETECTED (%02X%02X%02X) ON CH %d! SAVING <<<\n",
                                           parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2, i + 1);
                             ioNode.getProfiles()[i].destMac = parsedFrame.destMac;
-                            saveConfiguration();
+                            ConfigManager::saveDevices(ioNode);
                         }
                         break;
                     }
                 }
             }
 
-            if (isAuth) saveConfiguration(); // Save seq counter increments
+            if (isAuth) ConfigManager::saveDevices(ioNode); // Save seq counter increments
 
             // Update OLED
             if (!isProvisioning) {

@@ -2,10 +2,9 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include "hal/BoardHAL.h"
+#include "ConfigManager.h"
 
 extern IoHomeNode ioNode;
-extern IoHomeProfile devices[5];
-extern void saveConfiguration();
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -32,7 +31,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
             String indexStr = topicStr.substring(expectedPrefix.length(), nextSlash);
             uint8_t channelIndex = indexStr.toInt();
 
-            if (channelIndex < 5 && devices[channelIndex].active) {
+            if (channelIndex < 5 && ConfigManager::devices[channelIndex].active) {
                 BoardHAL::radio->standby(); // Pause receiving
                 int16_t state = RADIOLIB_ERR_NONE;
 
@@ -49,7 +48,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
                 if (state == RADIOLIB_ERR_NONE) {
                     Serial.println("    [MQTT] Transmission Successful");
-                    saveConfiguration(); // Save incremented sequence counter
+                    ConfigManager::saveDevices(ioNode); // Save incremented sequence counter
                 } else {
                     Serial.printf("    [MQTT] Transmission Failed: %d\n", state);
                 }
@@ -61,9 +60,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
 void publishDiscovery() {
     for (int i = 0; i < 5; i++) {
-        if (devices[i].active) {
+        if (ConfigManager::devices[i].active) {
             String uniqueId = "iown_awning_" + String(i);
-            String name = strlen(devices[i].description) > 0 ? String(devices[i].description) : ("IoHome Awning " + String(i + 1));
+            String name = strlen(ConfigManager::devices[i].description) > 0 ? String(ConfigManager::devices[i].description) : ("IoHome Awning " + String(i + 1));
             String commandTopic = String(currentConfig.baseTopic) + "/cover/" + String(i) + "/set";
             String stateTopic = String(currentConfig.baseTopic) + "/cover/" + String(i) + "/state";
             String discoveryTopic = "homeassistant/cover/" + uniqueId + "/config";

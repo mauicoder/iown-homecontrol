@@ -1,16 +1,12 @@
 #include "IoHomeWebSniffer.h"
 #include "IoHome.h"
 #include "MqttManager.h"
-
+#include "ConfigManager.h"
 
 volatile char webCommandTarget = 0; // Global variable to pass web commands to the main loop
 volatile uint8_t webCommandDevice = 0;
 
-extern IoHomeProfile devices[5]; // Access the globally enrolled devices
 extern IoHomeNode ioNode; // Needed to update the active profile in RAM
-extern void saveConfiguration(); // Needed to write changes to NVRAM
-extern MqttConfig mqttConfig; // Access global MQTT config
-extern void saveMqttConfiguration(); // Save MQTT changes
 
 IoHomeWebSniffer::IoHomeWebSniffer() : _server(80) {}
 
@@ -18,7 +14,7 @@ void IoHomeWebSniffer::handleRoot() {
     String controlsHtml = "";
     int activeCount = 0;
     for (int i = 0; i < 5; i++) {
-        if (devices[i].active) {
+        if (ConfigManager::devices[i].active) {
             activeCount++;
             char buf[1024];
             snprintf(buf, sizeof(buf),
@@ -29,9 +25,9 @@ void IoHomeWebSniffer::handleRoot() {
                 "<button class=\"btn\" onclick=\"fetch('/cmd?c=S&d=%d')\">MY</button>"
                 "<button class=\"btn\" onclick=\"fetch('/cmd?c=D&d=%d')\">DOWN</button>"
                 "<button class=\"btn\" style=\"background:#005500;\" onclick=\"fetch('/cmd?c=P&d=%d')\">POLL</button><br><br>",
-                i + 1, i, devices[i].description, i, i,
-                devices[i].sourceMac.n0, devices[i].sourceMac.n1, devices[i].sourceMac.n2,
-                devices[i].destMac.n0, devices[i].destMac.n1, devices[i].destMac.n2,
+                i + 1, i, ConfigManager::devices[i].description, i, i,
+                ConfigManager::devices[i].sourceMac.n0, ConfigManager::devices[i].sourceMac.n1, ConfigManager::devices[i].sourceMac.n2,
+                ConfigManager::devices[i].destMac.n0, ConfigManager::devices[i].destMac.n1, ConfigManager::devices[i].destMac.n2,
                 i, i, i, i);
             controlsHtml += buf;
         }
@@ -51,7 +47,7 @@ void IoHomeWebSniffer::handleRoot() {
         "Pass: <input type='password' id='mqtt_w' value='%s' size='15'><br><br>"
         "Topic: <input type='text' id='mqtt_t' value='%s' size='15'> "
         "<button class=\"btn-small\" onclick=\"fetch('/mqttcfg?s='+encodeURIComponent(document.getElementById('mqtt_s').value)+'&p='+encodeURIComponent(document.getElementById('mqtt_p').value)+'&u='+encodeURIComponent(document.getElementById('mqtt_u').value)+'&w='+encodeURIComponent(document.getElementById('mqtt_w').value)+'&t='+encodeURIComponent(document.getElementById('mqtt_t').value)).then(r => r.text()).then(t => alert(t))\">Save MQTT</button><br><br>",
-        mqttStatus, mqttConfig.server, mqttConfig.port, mqttConfig.user, mqttConfig.password, mqttConfig.baseTopic);
+        mqttStatus, ConfigManager::mqttConfig.server, ConfigManager::mqttConfig.port, ConfigManager::mqttConfig.user, ConfigManager::mqttConfig.password, ConfigManager::mqttConfig.baseTopic);
     String mqttHtml = mqttBuf;
 
     String html = R"HTML(<html><head><title>IoHome Sniffer</title>
@@ -96,7 +92,7 @@ void IoHomeWebSniffer::begin() {
                 String n = _server.arg("n");
                 strncpy(ioNode.getProfiles()[devIdx].description, n.c_str(), 31);
                 ioNode.getProfiles()[devIdx].description[31] = '\0';
-                saveConfiguration(); // Syncs ioNode -> devices array -> NVRAM
+                ConfigManager::saveDevices(ioNode); // Syncs ioNode -> NVRAM
                 Serial.printf("\n>>> UPDATED NAME FOR CH %d to '%s' <<<\n", devIdx + 1, ioNode.getProfiles()[devIdx].description);
             }
         }
@@ -105,24 +101,24 @@ void IoHomeWebSniffer::begin() {
     _server.on("/mqttcfg", [this]() {
         if (_server.hasArg("s")) {
             // Clear the struct to safely remove any old longer strings
-            memset(&mqttConfig, 0, sizeof(MqttConfig));
+            memset(&ConfigManager::mqttConfig, 0, sizeof(MqttConfig));
 
-            strncpy(mqttConfig.server, _server.arg("s").c_str(), sizeof(mqttConfig.server) - 1);
-            mqttConfig.port = _server.hasArg("p") ? _server.arg("p").toInt() : 1883;
-            strncpy(mqttConfig.user, _server.arg("u").c_str(), sizeof(mqttConfig.user) - 1);
-            strncpy(mqttConfig.password, _server.arg("w").c_str(), sizeof(mqttConfig.password) - 1);
+            strncpy(ConfigManager::mqttConfig.server, _server.arg("s").c_str(), sizeof(ConfigManager::mqttConfig.server) - 1);
+            ConfigManager::mqttConfig.port = _server.hasArg("p") ? _server.arg("p").toInt() : 1883;
+            strncpy(ConfigManager::mqttConfig.user, _server.arg("u").c_str(), sizeof(ConfigManager::mqttConfig.user) - 1);
+            strncpy(ConfigManager::mqttConfig.password, _server.arg("w").c_str(), sizeof(ConfigManager::mqttConfig.password) - 1);
 
             String topicArg = _server.arg("t");
             if (topicArg.length() > 0) {
-                strncpy(mqttConfig.baseTopic, topicArg.c_str(), sizeof(mqttConfig.baseTopic) - 1);
+                strncpy(ConfigManager::mqttConfig.baseTopic, topicArg.c_str(), sizeof(ConfigManager::mqttConfig.baseTopic) - 1);
             } else {
-                strncpy(mqttConfig.baseTopic, "iown", sizeof(mqttConfig.baseTopic) - 1);
+                strncpy(ConfigManager::mqttConfig.baseTopic, "iown", sizeof(ConfigManager::mqttConfig.baseTopic) - 1);
             }
 
-            saveMqttConfiguration();
+            ConfigManager::saveMqtt();
 
             MqttManager::disconnect(); // Force a clean disconnect
-            MqttManager::begin(mqttConfig); // Re-init with new settings
+            MqttManager::begin(ConfigManager::mqttConfig); // Re-init with new settings
         }
         _server.send(200, "text/plain", "MQTT Saved");
     });
@@ -171,7 +167,7 @@ void IoHomeWebSniffer::appendDecodedPacket(uint32_t frameCount, const IoHomeFram
 
     bool isFromAwning = false;
     for (int i = 0; i < 5; i++) {
-        if (devices[i].active && memcmp(&devices[i].destMac, &frame.sourceMac, 3) == 0) {
+        if (ConfigManager::devices[i].active && memcmp(&ConfigManager::devices[i].destMac, &frame.sourceMac, 3) == 0) {
             isFromAwning = true;
             break;
         }
