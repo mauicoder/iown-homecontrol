@@ -1,5 +1,7 @@
 #include "IoHomeWebSniffer.h"
 #include "IoHome.h"
+#include "MqttManager.h"
+
 
 volatile char webCommandTarget = 0; // Global variable to pass web commands to the main loop
 volatile uint8_t webCommandDevice = 0;
@@ -7,6 +9,8 @@ volatile uint8_t webCommandDevice = 0;
 extern IoHomeProfile devices[5]; // Access the globally enrolled devices
 extern IoHomeNode ioNode; // Needed to update the active profile in RAM
 extern void saveConfiguration(); // Needed to write changes to NVRAM
+extern MqttConfig mqttConfig; // Access global MQTT config
+extern void saveMqttConfiguration(); // Save MQTT changes
 
 IoHomeWebSniffer::IoHomeWebSniffer() : _server(80) {}
 
@@ -36,17 +40,31 @@ void IoHomeWebSniffer::handleRoot() {
         controlsHtml = "<p style='color:#ff0;'>No devices enrolled yet. Use your remote to send a 1-Way Key Transfer.</p>";
     }
 
+    const char* mqttStatus = MqttManager::isConnected() ? "<span style='color:#0f0;'> (Connected)</span>" : "<span style='color:#f00;'> (Disconnected)</span>";
+
+    char mqttBuf[1024];
+    snprintf(mqttBuf, sizeof(mqttBuf),
+        "<h3>MQTT Configuration%s</h3>"
+        "Server: <input type='text' id='mqtt_s' value='%s' size='20'> "
+        "Port: <input type='text' id='mqtt_p' value='%d' size='5'><br><br>"
+        "User: <input type='text' id='mqtt_u' value='%s' size='15'> "
+        "Pass: <input type='password' id='mqtt_w' value='%s' size='15'><br><br>"
+        "Topic: <input type='text' id='mqtt_t' value='%s' size='15'> "
+        "<button class=\"btn-small\" onclick=\"fetch('/mqttcfg?s='+encodeURIComponent(document.getElementById('mqtt_s').value)+'&p='+encodeURIComponent(document.getElementById('mqtt_p').value)+'&u='+encodeURIComponent(document.getElementById('mqtt_u').value)+'&w='+encodeURIComponent(document.getElementById('mqtt_w').value)+'&t='+encodeURIComponent(document.getElementById('mqtt_t').value)).then(r => r.text()).then(t => alert(t))\">Save MQTT</button><br><br>",
+        mqttStatus, mqttConfig.server, mqttConfig.port, mqttConfig.user, mqttConfig.password, mqttConfig.baseTopic);
+    String mqttHtml = mqttBuf;
+
     String html = R"HTML(<html><head><title>IoHome Sniffer</title>
     <style>body{font-family: monospace; background: #121212; color: #0f0; padding: 20px;} .pkt{border-bottom: 1px solid #333; padding: 5px; margin-bottom: 5px;}
     .btn{background:#333;color:#0f0;border:1px solid #0f0;padding:12px 24px;margin:5px;cursor:pointer;font-family:monospace;font-size:16px;font-weight:bold;}
     .btn:hover{background:#0f0;color:#121212;}
     .btn-small{background:#333;color:#0f0;border:1px solid #0f0;padding:4px 8px;cursor:pointer;font-family:monospace;font-weight:bold;}
     .btn-small:hover{background:#0f0;color:#121212;}
-    input[type=text]{background:#222;color:#0f0;border:1px solid #0f0;padding:4px;font-family:monospace;margin-right:5px;}
+    input[type=text], input[type=password]{background:#222;color:#0f0;border:1px solid #0f0;padding:4px;font-family:monospace;margin-right:5px;}
     .controls{margin-bottom: 20px; padding-bottom: 20px; border-bottom: 2px solid #0f0;}
     </style>
     </head><body><h2>IoHome Packet Sniffer</h2>
-    <div class="controls">)HTML" + controlsHtml + R"HTML(</div><p>Waiting for packets...</p><div id="log"></div>
+    <div class="controls">)HTML" + controlsHtml + R"HTML(</div><div class="controls">)HTML" + mqttHtml + R"HTML(</div><p>Waiting for packets...</p><div id="log"></div>
     <script>setInterval(() => { fetch('/packets').then(r => r.text()).then(t => {
     if(t) document.getElementById('log').innerHTML = t + document.getElementById('log').innerHTML;
     });}, 1000);</script></body></html>)HTML";
@@ -83,6 +101,30 @@ void IoHomeWebSniffer::begin() {
             }
         }
         _server.send(200, "text/plain", "Name Saved");
+    });
+    _server.on("/mqttcfg", [this]() {
+        if (_server.hasArg("s")) {
+            // Clear the struct to safely remove any old longer strings
+            memset(&mqttConfig, 0, sizeof(MqttConfig));
+
+            strncpy(mqttConfig.server, _server.arg("s").c_str(), sizeof(mqttConfig.server) - 1);
+            mqttConfig.port = _server.hasArg("p") ? _server.arg("p").toInt() : 1883;
+            strncpy(mqttConfig.user, _server.arg("u").c_str(), sizeof(mqttConfig.user) - 1);
+            strncpy(mqttConfig.password, _server.arg("w").c_str(), sizeof(mqttConfig.password) - 1);
+
+            String topicArg = _server.arg("t");
+            if (topicArg.length() > 0) {
+                strncpy(mqttConfig.baseTopic, topicArg.c_str(), sizeof(mqttConfig.baseTopic) - 1);
+            } else {
+                strncpy(mqttConfig.baseTopic, "iown", sizeof(mqttConfig.baseTopic) - 1);
+            }
+
+            saveMqttConfiguration();
+
+            MqttManager::disconnect(); // Force a clean disconnect
+            MqttManager::begin(mqttConfig); // Re-init with new settings
+        }
+        _server.send(200, "text/plain", "MQTT Saved");
     });
     _server.begin();
 }

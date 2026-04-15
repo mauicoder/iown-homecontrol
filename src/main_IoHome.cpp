@@ -2,6 +2,7 @@
 #include <SPI.h>
 #include <RadioLib.h>
 #include "IoHome.h" // Include the IoHome library header
+#include "MqttManager.h" // Include the MQTT Manager header
 #include <Wire.h>
 #include <mbedtls/aes.h>
 #include <Preferences.h>
@@ -10,7 +11,8 @@
 #include "IoHomeCrypto.h"
 #include "IoHomeWebSniffer.h"
 #include "hal/BoardHAL.h" // Include the hardware abstraction layer for board-specific configurations
-#include "UIManager.h"
+#include <WiFiProv.h>
+#include <qrcode.h>
 
 // --- INTERRUPT HANDLING ---
 // Flag to indicate that a packet was received.
@@ -34,6 +36,11 @@ uint32_t lastHopTime = 0;
 const uint32_t HOP_INTERVAL_MS = 10; // Hop every 10ms
 const float RSSI_HOP_THRESHOLD = -95.0; // Pause hopping if signal is stronger than this
 
+// --- PACKET HISTORY ---
+#define HISTORY_SIZE 3
+char packetHistory[HISTORY_SIZE][32];
+uint8_t historyCount = 0;
+
 // --- IOHOME LIBRARY OBJECTS ---
 // Define the channel based on targetFreq
 IoHomeChannel_t ioHomeChannel = { .c0 = IOHOME_CHAN_C0, .c1 = IOHOME_CHAN_C1 };
@@ -46,6 +53,11 @@ IoHomeNode ioNode(BoardHAL::radio, &ioHomeChannel);
 IoHomeWebSniffer webSniffer;
 
 void saveConfiguration(); // Forward declaration
+void saveMqttConfiguration(); // Forward declaration
+void updateDisplay(); // Forward declaration
+
+MqttConfig mqttConfig;
+volatile bool isProvisioning = false;
 
 // --- CONFIGURATION MANAGEMENT ---
 void loadConfiguration() {
@@ -67,7 +79,21 @@ void loadConfiguration() {
         Serial.println("No Device Profiles in config. Using empty array.");
         memset(devices, 0, sizeof(devices));
     }
-    preferences.end();
+
+    // Load MQTT Configuration
+    size_t mqttLen = preferences.getBytesLength("mqtt");
+    if (mqttLen > 0 && mqttLen <= sizeof(MqttConfig)) {
+        preferences.getBytes("mqtt", &mqttConfig, sizeof(MqttConfig));
+        Serial.println("Loaded MQTT Configuration from NVRAM.");
+    } else {
+        memset(&mqttConfig, 0, sizeof(MqttConfig));
+        mqttConfig.port = 1883;
+        strncpy(mqttConfig.server, "homeassistant.local", sizeof(mqttConfig.server) - 1);
+        strncpy(mqttConfig.baseTopic, "iown", sizeof(mqttConfig.baseTopic) - 1);
+        Serial.println("No MQTT Configuration found. Using defaults.");
+    }
+
+    preferences.end(); // All read operations are done, close preferences.
 
     if (needsMigration) {
         size_t oldProfileSize = len / 5;
@@ -110,6 +136,109 @@ void saveConfiguration() {
     preferences.begin("iohome", false); // false = read/write mode
     preferences.putBytes("devices", devices, sizeof(devices));
     preferences.end();
+}
+
+void saveMqttConfiguration() {
+    preferences.begin("iohome", false); // false = read/write mode
+    size_t written = preferences.putBytes("mqtt", &mqttConfig, sizeof(MqttConfig));
+    Serial.printf("[NVRAM] Saved MQTT Config: %zu bytes\n", written);
+    preferences.end();
+}
+
+// --- DISPLAY UPDATE ---
+void updateDisplay() {
+    if (isProvisioning) return;
+
+    BoardHAL::display.clearBuffer();
+    BoardHAL::display.setFont(u8g2_font_6x10_tr);
+
+    if (validPacketCount == 0) {
+        BoardHAL::display.drawStr(0, 15, BoardHAL::getBoardName());
+        if (WiFi.status() == WL_CONNECTED) {
+            String ipStr = "IP: " + WiFi.localIP().toString();
+            BoardHAL::display.drawStr(0, 30, ipStr.c_str());
+        } else {
+            BoardHAL::display.drawStr(0, 30, "Waiting for WiFi...");
+        }
+        BoardHAL::display.drawStr(0, 45, "Radio: LISTENING");
+
+        String mqttStr = "MQTT: ";
+        if (strlen(mqttConfig.server) == 0) mqttStr += "Unconfigured";
+        else if (MqttManager::isConnected()) mqttStr += "Connected";
+        else mqttStr += "Disconnected";
+        BoardHAL::display.drawStr(0, 60, mqttStr.c_str());
+    } else {
+        char headerBuf[32];
+        const char* mState = (strlen(mqttConfig.server) == 0) ? "No Cfg" : (MqttManager::isConnected() ? "OK" : "ERR");
+        snprintf(headerBuf, 32, "Rx:%lu | MQTT:%s", validPacketCount, mState);
+        BoardHAL::display.drawStr(0, 12, headerBuf);
+        for (int h = 0; h < historyCount; h++) {
+            BoardHAL::display.drawStr(0, 28 + (h * 15), packetHistory[h]);
+        }
+    }
+    BoardHAL::display.sendBuffer();
+}
+
+static void renderOledQR(esp_qrcode_handle_t qrcode) {
+    int size = esp_qrcode_get_size(qrcode);
+    int scale = (size > 30) ? 1 : 2; // Auto-scale to ensure it fits the 64px height
+    int x0 = (128 - (size * scale)) / 2;
+    int y0 = (64 - (size * scale)) / 2;
+
+    if (y0 < 0) y0 = 0; // Safety clamp
+
+    BoardHAL::display.clearBuffer();
+
+    // Draw a white background square for the QR code to ensure contrast
+    BoardHAL::display.setDrawColor(1);
+    BoardHAL::display.drawBox(x0 - 2, y0 - 2, (size * scale) + 4, (size * scale) + 4);
+
+    // Draw the black QR modules
+    BoardHAL::display.setDrawColor(0);
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            if (esp_qrcode_get_module(qrcode, x, y)) {
+                BoardHAL::display.drawBox(x0 + (x * scale), y0 + (y * scale), scale, scale);
+            }
+        }
+    }
+    BoardHAL::display.setDrawColor(1); // Restore white text color
+    BoardHAL::display.setFont(u8g2_font_5x7_tr);
+    BoardHAL::display.drawStr(0, 20, "Scan");
+    BoardHAL::display.drawStr(0, 30, "App");
+    BoardHAL::display.drawStr(0, 40, "QR");
+    BoardHAL::display.sendBuffer();
+}
+
+void sysProvEvent(arduino_event_t *sys_event) {
+    switch (sys_event->event_id) {
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP: {
+            Serial.print("\n>>> Wi-Fi Connected! IP: ");
+            Serial.println(WiFi.localIP());
+            isProvisioning = false;
+            updateDisplay();
+            break;
+        }
+        case ARDUINO_EVENT_PROV_START: {
+            isProvisioning = true;
+            Serial.println("\n>>> Wi-Fi Provisioning Started.");
+            Serial.println(">>> Use the 'ESP BLE Prov' App. Device: PROV_IoHome, PoP: iown1234");
+            Serial.println(">>> Or scan the QR code below directly from the app:\n");
+            WiFiProv.printQR("PROV_IoHome", "iown1234", "ble");
+
+            // Render QR to OLED using ESP32's built-in QR library
+            const char* qrPayload = "{\"ver\":\"v1\",\"name\":\"PROV_IoHome\",\"pop\":\"iown1234\",\"transport\":\"ble\"}";
+            esp_qrcode_config_t cfg = ESP_QRCODE_CONFIG_DEFAULT();
+            cfg.display_func = renderOledQR;
+            esp_qrcode_generate(&cfg, qrPayload);
+            break;
+        }
+        case ARDUINO_EVENT_PROV_CRED_SUCCESS:
+            Serial.println("\n>>> Provisioning Successful!");
+            break;
+        default:
+            break;
+    }
 }
 
 // --- PERSISTENT STATE MACHINE PARSER ---
@@ -159,25 +288,28 @@ public:
 
     bool extractNextFrame(IoHomeNode& ioNode, IoHomeFrame_t& outFrame, bool& outAuthStatus) {
         size_t searchIdx = 0;
-        // Serial.printf(">>> Searching rolling buffer (Current length: %zu bytes)\n", length); // Disabled to reduce log spam
+        Serial.printf(">>> Searching rolling buffer (Current length: %zu bytes)\n", length);
 
         while (searchIdx + IOHOME_MIN_FRAME_LEN <= length) {
             uint8_t ctrlByte = buffer[searchIdx];
 
-            size_t declaredBodyLen = (ctrlByte & 0x1F) + 1;
-            size_t expectedTotalLen = declaredBodyLen + IOHOME_FRAME_CRC_LEN;
+            // io-homecontrol MAC headers usually start with 0xFx (e.g., 0xF8, 0xF6, 0xF0)
+            if ((ctrlByte & 0xF0) == 0xF0) {
+                size_t declaredBodyLen = (ctrlByte & 0x1F) + 1;
+                size_t expectedTotalLen = declaredBodyLen + IOHOME_FRAME_CRC_LEN;
 
-            if (expectedTotalLen >= IOHOME_MIN_FRAME_LEN && expectedTotalLen <= 64) {
-                if (searchIdx + expectedTotalLen <= length) {
-                    if (IoHomeNode::validateFrameCrc(&buffer[searchIdx], expectedTotalLen)) {
-                        outAuthStatus = ioNode.parseFrame(&buffer[searchIdx], expectedTotalLen, outFrame);
-                        consume(searchIdx + expectedTotalLen); // Remove parsed packet and preceding garbage
-                        return true; // We found one!
+                if (expectedTotalLen >= IOHOME_MIN_FRAME_LEN && expectedTotalLen <= 64) {
+                    if (searchIdx + expectedTotalLen <= length) {
+                        if (IoHomeNode::validateFrameCrc(&buffer[searchIdx], expectedTotalLen)) {
+                            outAuthStatus = ioNode.parseFrame(&buffer[searchIdx], expectedTotalLen, outFrame);
+                            consume(searchIdx + expectedTotalLen); // Remove parsed packet and preceding garbage
+                            return true; // We found one!
+                        }
+                    } else {
+                        Serial.printf("    [Parser] Found valid MAC header, but packet is split. Waiting for next chunk.\n");
+                        break; // Valid-looking header, but packet is split. Wait for next chunk.
                     }
                 }
-                // We no longer break on split packets. Since we removed the strict 0xF0 header filter,
-                // random garbage bytes near the end of the buffer might evaluate to a long expectedTotalLen.
-                // If we break here, we stall the parser. Full packets are always read in one piece via FSK.
             }
             searchIdx++;
         }
@@ -204,7 +336,11 @@ void setup() {
 
   // 2. DISPLAY INIT
   BoardHAL::display.begin();
-  UIManager::drawBootScreen();
+  BoardHAL::display.setFont(u8g2_font_6x10_tr);
+  BoardHAL::display.clearBuffer();
+  BoardHAL::display.drawStr(0, 15, BoardHAL::getBoardName());
+  BoardHAL::display.drawStr(0, 30, "Booting...");
+  BoardHAL::display.sendBuffer();
 
   // Initialize Serial and wait for connection
   Serial.begin(115200);
@@ -215,8 +351,11 @@ void setup() {
   Serial.println(F("==============================="));
 
   loadConfiguration();
+  MqttManager::begin(mqttConfig);
 
-  UIManager::begin();
+  // Setup WiFi Provisioning
+  WiFi.onEvent(sysProvEvent);
+  WiFiProv.beginProvision(NETWORK_PROV_SCHEME_BLE, NETWORK_PROV_SCHEME_HANDLER_FREE_BTDM, NETWORK_PROV_SECURITY_1, "iown1234", "PROV_IoHome");
   webSniffer.begin();
 
   // 3. RADIOLIB STARTUP
@@ -238,13 +377,7 @@ void setup() {
     Serial.println(F("IoHomeNode initialized with multi-profile support."));
 
     // Display Ready State
-    if (!UIManager::isProvisioning()) {
-        if (WiFi.status() == WL_CONNECTED) {
-            UIManager::drawReadyScreen("IP: " + WiFi.localIP().toString());
-        } else {
-            UIManager::drawReadyScreen("Waiting for WiFi...");
-        }
-    }
+    updateDisplay();
 
   } else {
     Serial.println(F("RADIO INIT FAILED"));
@@ -256,10 +389,33 @@ void setup() {
 }
 
 void loop() {
+  MqttManager::loop();
   // Handle Web Server Clients
   webSniffer.loop();
-  // Handle System UI and WiFi state
-  UIManager::loop();
+
+  // --- UPDATE DISPLAY ON MQTT STATE CHANGE ---
+  static bool lastMqttState = false;
+  bool currentMqttState = MqttManager::isConnected();
+  if (currentMqttState != lastMqttState) {
+      lastMqttState = currentMqttState;
+      updateDisplay();
+  }
+
+  // --- WIFI SELF-HEALING ---
+  // If the board has stale/dead credentials from an old project,
+  // it will try to connect forever and never show the QR code.
+  // If 15 seconds pass without connecting, wipe the dead credentials and reboot into setup mode!
+  static uint32_t wifiTimeoutTimer = millis();
+  if (!isProvisioning && WiFi.status() != WL_CONNECTED) {
+      if (millis() - wifiTimeoutTimer > 15000) {
+          Serial.println("\n>>> Wi-Fi connection timed out! Wiping dead credentials and rebooting to Setup Mode... <<<");
+          WiFi.disconnect(false, true);
+          delay(500);
+          ESP.restart();
+      }
+  } else {
+      wifiTimeoutTimer = millis(); // Reset timer while connected or provisioning
+  }
 
   // --- 0. CHANNEL HOPPING ---
   if (!receivedFlag && (millis() - lastHopTime >= HOP_INTERVAL_MS)) {
@@ -275,9 +431,8 @@ void loop() {
       BoardHAL::startReceive();
       lastHopTime = millis();
     } else {
-      // Signal detected! Pause hopping for 100ms to allow the packet to arrive.
-      // This ensures we safely bridge the 30ms gaps between rapid-fire 2-way transmissions.
-      lastHopTime = millis() + 100;
+      // Signal detected! Pause hopping for 20ms to allow the packet to arrive
+      lastHopTime = millis() + 20;
     }
   }
 
@@ -330,24 +485,6 @@ void loop() {
                 parsedFrame.commandId,
                 parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
                 parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2);
-
-          Serial.print(F("    Payload: "));
-          for (size_t i = 0; i < parsedFrame.payload.size(); i++) {
-              Serial.printf("%02X ", parsedFrame.payload[i]);
-          }
-          Serial.println();
-
-          // Check if this packet came FROM one of our known Awnings
-          bool isFromAwning = false;
-          for (int i = 0; i < 5; i++) {
-              if (devices[i].active && memcmp(&devices[i].destMac, &parsedFrame.sourceMac, 3) == 0) {
-                  isFromAwning = true;
-                  break;
-              }
-          }
-          if (isFromAwning) {
-              Serial.println(F("    >>> AWNING ACKNOWLEDGMENT/REPLY DETECTED! <<<"));
-          }
 
           if (!isAuth) {
               Serial.println(F("    >>> AES MAC VERIFICATION FAILED (Or No Keys) <<<"));
@@ -406,10 +543,6 @@ void loop() {
               } else {
                   Serial.println(" <<<");
               }
-          } else if (parsedFrame.commandId == 0x54 && isAuth) {
-              Serial.println("    >>> DECODED ACTION: POLL STATUS (Get Info 1) <<<");
-          } else if (parsedFrame.commandId == 0x55 && isAuth) {
-              Serial.println("    >>> DECODED ACTION: STATUS REPLY (Info 1 Answer) <<<");
           }
 
           // Automatically learn the targeted Awning's address from authenticated 0x00 commands
@@ -433,8 +566,18 @@ void loop() {
           }
 
           // Update OLED
-          if (!UIManager::isProvisioning()) {
-              UIManager::drawPacketHistory(validPacketCount, parsedFrame);
+          if (!isProvisioning) {
+              if (historyCount < HISTORY_SIZE) historyCount++;
+              for (int h = HISTORY_SIZE - 1; h > 0; --h) {
+                  strncpy(packetHistory[h], packetHistory[h-1], 32);
+              }
+              snprintf(packetHistory[0], 32, "#%lu %02X%02X%02X>%02X%02X%02X %02X",
+                       validPacketCount,
+                       parsedFrame.sourceMac.n0, parsedFrame.sourceMac.n1, parsedFrame.sourceMac.n2,
+                       parsedFrame.destMac.n0, parsedFrame.destMac.n1, parsedFrame.destMac.n2,
+                       parsedFrame.commandId);
+
+              updateDisplay();
           }
       }
 
@@ -493,7 +636,7 @@ void loop() {
           }
       }
 
-      if (execute && (c == 'U' || c == 'u' || c == 'D' || c == 'd' || c == 'S' || c == 's' || c == 'm' || c == 'M' || c == 'P' || c == 'p')) {
+      if (execute && (c == 'U' || c == 'u' || c == 'D' || c == 'd' || c == 'S' || c == 's' || c == 'm' || c == 'M')) {
           BoardHAL::radio->standby(); // Pause receiving to free up the radio chip
           int16_t state = RADIOLIB_ERR_NONE;
 
@@ -503,9 +646,6 @@ void loop() {
           } else if (c == 'D' || c == 'd') {
               Serial.printf("\n>>> USER COMMAND: SENDING 'DOWN' ON CH %d <<<\n", targetDevice + 1);
               state = ioNode.sendButton(IOHOME_ACTION_DOWN, targetDevice);
-          } else if (c == 'P' || c == 'p') {
-              Serial.printf("\n>>> USER COMMAND: POLLING STATUS ON CH %d <<<\n", targetDevice + 1);
-              state = ioNode.pollStatus(targetDevice);
           } else {
               Serial.printf("\n>>> USER COMMAND: SENDING 'MY/STOP' ON CH %d <<<\n", targetDevice + 1);
               state = ioNode.sendButton(IOHOME_ACTION_MY, targetDevice);
