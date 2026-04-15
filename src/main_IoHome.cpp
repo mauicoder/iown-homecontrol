@@ -46,6 +46,7 @@ uint8_t historyCount = 0;
 IoHomeChannel_t ioHomeChannel = { .c0 = IOHOME_CHAN_C0, .c1 = IOHOME_CHAN_C1 };
 
 uint32_t validPacketCount = 0;
+uint32_t lastPacketTime = 0;
 Preferences preferences;
 
 IoHomeProfile devices[5];
@@ -152,7 +153,9 @@ void updateDisplay() {
     BoardHAL::display.clearBuffer();
     BoardHAL::display.setFont(u8g2_font_6x10_tr);
 
-    if (validPacketCount == 0) {
+    bool showHistory = (validPacketCount > 0) && (millis() - lastPacketTime <= 10000);
+
+    if (!showHistory) {
         BoardHAL::display.drawStr(0, 15, BoardHAL::getBoardName());
         if (WiFi.status() == WL_CONNECTED) {
             String ipStr = "IP: " + WiFi.localIP().toString();
@@ -160,7 +163,10 @@ void updateDisplay() {
         } else {
             BoardHAL::display.drawStr(0, 30, "Waiting for WiFi...");
         }
-        BoardHAL::display.drawStr(0, 45, "Radio: LISTENING");
+
+        char radioBuf[32];
+        snprintf(radioBuf, sizeof(radioBuf), "Radio: Rx %lu", validPacketCount);
+        BoardHAL::display.drawStr(0, 45, radioBuf);
 
         String mqttStr = "MQTT: ";
         if (strlen(mqttConfig.server) == 0) mqttStr += "Unconfigured";
@@ -393,11 +399,22 @@ void loop() {
   // Handle Web Server Clients
   webSniffer.loop();
 
-  // --- UPDATE DISPLAY ON MQTT STATE CHANGE ---
+  // --- UPDATE DISPLAY ON STATE CHANGES OR TIMEOUTS ---
   static bool lastMqttState = false;
   bool currentMqttState = MqttManager::isConnected();
-  if (currentMqttState != lastMqttState) {
+  bool mqttChanged = (currentMqttState != lastMqttState);
+  if (mqttChanged) {
       lastMqttState = currentMqttState;
+  }
+
+  static bool showingHistory = false;
+  bool shouldShowHistory = (validPacketCount > 0) && (millis() - lastPacketTime <= 10000);
+  bool historyChanged = (showingHistory != shouldShowHistory);
+  if (historyChanged) {
+      showingHistory = shouldShowHistory;
+  }
+
+  if (mqttChanged || historyChanged) {
       updateDisplay();
   }
 
@@ -479,6 +496,7 @@ void loop() {
       bool isAuth;
       while (streamParser.extractNextFrame(ioNode, parsedFrame, isAuth)) {
           validPacketCount++;
+          lastPacketTime = millis();
 
           Serial.printf(">>> SUCCESSFULLY RECEIVED IOHOME FRAME #%lu (CRC OK) <<<\n", validPacketCount);
           Serial.printf("    Command: 0x%02X | Source: %02X%02X%02X | Dest: %02X%02X%02X\n",
