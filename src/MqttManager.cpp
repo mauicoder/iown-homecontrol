@@ -3,8 +3,11 @@
 #include <PubSubClient.h>
 #include "hal/BoardHAL.h"
 #include "ConfigManager.h"
+#include "IoHomeStreamParser.h" // Needed for streamParser extern
 
 extern IoHomeNode ioNode;
+extern volatile bool receivedFlag; // From main_IoHome.cpp
+extern IoHomeStreamParser streamParser; // From main_IoHome.cpp
 
 WiFiClient espClient;
 PubSubClient mqttClient(espClient);
@@ -53,16 +56,50 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
                     Serial.printf("    [MQTT] Transmission Failed: %d\n", state);
                 }
                 BoardHAL::startReceive(); // Resume receiving
+
+                // --- CRITICAL FIX FOR THE "GHOST PACKET" ---
+                // The radio.transmit() function can trigger the DIO interrupt when TxDone occurs.
+                // This sets receivedFlag to true. We MUST clear it here, otherwise the main loop will
+                // immediately try to read a dirty/empty FIFO buffer.
+                receivedFlag = false;
+                streamParser.clear();
             }
         }
     }
 }
 
 void publishDiscovery() {
+    String deviceIdentifier = "iown_gateway_" + WiFi.macAddress();
+    deviceIdentifier.replace(":", ""); // Remove colons from MAC address
+
+    // 1. Publish Parent Gateway Device (using a connectivity binary_sensor)
+    String gatewayUniqueId = deviceIdentifier + "_status";
+    String gatewayStateTopic = String(currentConfig.baseTopic) + "/gateway/state";
+    String gatewayDiscoveryTopic = "homeassistant/binary_sensor/" + gatewayUniqueId + "/config";
+
+    String gatewayPayload = "{";
+    gatewayPayload += "\"name\": \"Gateway Status\",";
+    gatewayPayload += "\"state_topic\": \"" + gatewayStateTopic + "\",";
+    gatewayPayload += "\"device_class\": \"connectivity\",";
+    gatewayPayload += "\"unique_id\": \"" + gatewayUniqueId + "\",";
+    gatewayPayload += "\"device\": {";
+    gatewayPayload += "\"identifiers\": [\"" + deviceIdentifier + "\"],";
+    gatewayPayload += "\"name\": \"ESP32 io-homecontrol Gateway\",";
+    gatewayPayload += "\"model\": \"" + String(BoardHAL::getBoardName()) + "\",";
+    gatewayPayload += "\"manufacturer\": \"iown-homecontrol\"";
+    gatewayPayload += "}";
+    gatewayPayload += "}";
+
+    Serial.println("    [MQTT] Publishing HA Discovery for Gateway");
+    mqttClient.publish(gatewayDiscoveryTopic.c_str(), gatewayPayload.c_str(), true); // true = retain message
+
+    // Publish the gateway state as ON (Connected)
+    mqttClient.publish(gatewayStateTopic.c_str(), "ON", true);
+
     for (int i = 0; i < 5; i++) {
         if (ConfigManager::devices[i].active) {
-            String uniqueId = "iown_awning_" + String(i);
-            String name = strlen(ConfigManager::devices[i].description) > 0 ? String(ConfigManager::devices[i].description) : ("IoHome Awning " + String(i + 1));
+            String uniqueId = deviceIdentifier + "_awning_" + String(i);
+            String name = strlen(ConfigManager::devices[i].description) > 0 ? String(ConfigManager::devices[i].description) : ("Awning " + String(i + 1));
             String commandTopic = String(currentConfig.baseTopic) + "/cover/" + String(i) + "/set";
             String stateTopic = String(currentConfig.baseTopic) + "/cover/" + String(i) + "/state";
             String discoveryTopic = "homeassistant/cover/" + uniqueId + "/config";
@@ -72,9 +109,19 @@ void publishDiscovery() {
             payload += "\"name\": \"" + name + "\",";
             payload += "\"command_topic\": \"" + commandTopic + "\",";
             payload += "\"state_topic\": \"" + stateTopic + "\",";
+            payload += "\"payload_open\": \"OPEN\",";
+            payload += "\"payload_close\": \"CLOSE\",";
+            payload += "\"payload_stop\": \"STOP\",";
             payload += "\"device_class\": \"awning\",";
-            payload += "\"optimistic\": true,";
-            payload += "\"unique_id\": \"" + uniqueId + "\"";
+            payload += "\"optimistic\": true,"; // Let HA assume the state, since we don't have position feedback
+            payload += "\"unique_id\": \"" + uniqueId + "\",";
+            payload += "\"device\": {";
+            payload += "\"identifiers\": [\"" + deviceIdentifier + "_" + String(i) + "\"],";
+            payload += "\"name\": \"" + name + "\",";
+            payload += "\"via_device\": \"" + deviceIdentifier + "\",";
+            payload += "\"model\": \"io-homecontrol Device\",";
+            payload += "\"manufacturer\": \"iown-homecontrol\"";
+            payload += "}";
             payload += "}";
 
             Serial.printf("    [MQTT] Publishing HA Discovery for Awning %d\n", i + 1);
@@ -97,8 +144,9 @@ void reconnect() {
         Serial.print("... ");
 
         String clientId = "IoHome-ESP32-" + String(random(0xffff), HEX);
+        String gatewayStateTopic = String(currentConfig.baseTopic) + "/gateway/state";
 
-        if (mqttClient.connect(clientId.c_str(), currentConfig.user, currentConfig.password)) {
+        if (mqttClient.connect(clientId.c_str(), currentConfig.user, currentConfig.password, gatewayStateTopic.c_str(), 0, true, "OFF")) {
             Serial.println("Connected!");
             publishDiscovery(); // Broadcast Home Assistant auto-discovery configs
 
@@ -129,7 +177,7 @@ void begin(const MqttConfig& config) {
         mqttClient.setServer(currentConfig.server, currentConfig.port);
     }
     mqttClient.setCallback(mqttCallback);
-    mqttClient.setBufferSize(512); // Increase buffer size for large Discovery JSONs
+    mqttClient.setBufferSize(1024); // Increase buffer size for large Discovery JSONs
 }
 
 void loop() {
