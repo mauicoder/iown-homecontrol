@@ -6,6 +6,12 @@ This project is an **ESP32-based emulator for the Somfy Situo 5 io-homecontrol r
 >
 > Kudos to all the persons that contributed to the progress of the project!
 
+
+### **Disclaimer**
+> [!CAUTION]
+> This tool designed for educational and testing purposes, provided "as is", without warranty of any kind. Creators and contributors are not responsible for any misuse or damage caused by thistool. Keep in mind that it is forbidden in most countries to try to interact with IO-Homecontrol devices that are not yours and you may be sued for doing it.
+
+ _I give limited support depending on my free time._
 ## Features
 
 * **Situo 5 Emulation**: Supports up to 5 independent channels/profiles.
