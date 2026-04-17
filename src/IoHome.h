@@ -2,14 +2,34 @@
 #define _IOHOME_H
 
 #include <RadioLib.h>
+#include <vector>     // Required for std::vector
+#include <algorithm>  // Required for std::copy
+
+// Define DEBUG_IOHOME to enable debug logs for IoHomeNode
+#define DEBUG_IOHOME
 
 #pragma region CONST
 // preamble
 #define IOHOME_PREAMBLE_LEN                 (512) // Preamble Length in Bits
 
 // sync word
-#define IOHOME_SYNC_WORD                    (0x57FD99)
-#define IOHOME_SYNC_WORD_LEN                (3)
+// io-homecontrol original hardware uses Direct Mode (bypassing the hardware Sync Word entirely).
+// The true physical Sync Word is the UART-encoded bits of "FF 33", which precisely evaluate to 0x57FD99.
+#define IOHOME_HW_SYNC_WORD                 (0x57FD99)
+#define IOHOME_HW_SYNC_WORD_LEN             (3)
+
+// FSK Radio Parameters
+#define IOHOME_FREQ                         (868.95f)
+#define IOHOME_CHAN_C0                      (868)
+#define IOHOME_CHAN_C1                      (95)
+#define IOHOME_BITRATE                      (38.4f)
+#define IOHOME_FREQ_DEV                     (19.2f)
+#define IOHOME_RX_BW                        (156.2f)
+
+// Protocol Constants
+#define IOHOME_CRC_POLY                     (0x8408)
+#define IOHOME_PN9_LFSR_INIT                (0x01FF)
+#define IOHOME_MIN_FRAME_LEN                (15)
 
 // frame header
 #define IOHOME_CTRLBYTE0_MODE_TWOWAY        (0x00 << 7)        //  7     7
@@ -24,11 +44,34 @@
 #define IOHOME_CTRLBYTE0_POS                (0x0)
 #define IOHOME_CTRLBYTE1_POS                (0x1)
 #define IOHOME_MAC_SOURCE_POS               (0x2)
-#define IOHOME_MAC_DEST_POS                 (0x3)
-#define IOHOME_MSG_LEN(MSG)                 (/* TODO get msg len*/)
+#define IOHOME_MAC_DEST_POS                 (IOHOME_MAC_SOURCE_POS + IOHOME_FRAME_MAC_LEN) // Corrected position: after source MAC
+#define IOHOME_MSG_LEN(MSG)                 ((MSG[IOHOME_CTRLBYTE0_POS] & 0x1F) + 1) // +1 for the control byte itself
+#define IOHOME_FRAME_CRC_LEN                (2) // CRC-16 is 2 bytes long
+#define IOHOME_FRAME_CRC_POS(FRAME_LEN)     ((FRAME_LEN) - IOHOME_FRAME_CRC_LEN)
 #define IOHOME_NUM_COMMANDS                 (2)
 #define IOHOME_CMD_0x00                     (0x00)
 #define IOHOME_CMD_0x01                     (0x01)
+
+// Frame building constants
+#define IOHOME_FRAME_HEADER_CORE_LEN        (1 + 1) // CTRL0 + CTRL1
+#define IOHOME_FRAME_MAC_LEN                (3)
+#define IOHOME_FRAME_HEADER_LEN             (IOHOME_FRAME_HEADER_CORE_LEN + 2 * IOHOME_FRAME_MAC_LEN) // CTRL0, CTRL1, SRC_MAC (3), DEST_MAC (3) = 8 bytes
+#define IOHOME_COMMAND_ID_LEN               (1)
+// Layer 3 constants
+#define IOHOME_SECURITY_COUNTER_LEN         (2)
+#define IOHOME_SECURITY_MAC_LEN             (6)
+#define IOHOME_SECURITY_FOOTER_LEN          (IOHOME_SECURITY_COUNTER_LEN + IOHOME_SECURITY_MAC_LEN) // 8 bytes
+
+// Button Actions for Command 0x00
+#define IOHOME_ACTION_UP                    (0x0000)
+#define IOHOME_ACTION_DOWN                  (0xC800)
+#define IOHOME_ACTION_MY                    (0xD200)
+
+// Buffer lengths
+#define IOHOME_FIXED_PAYLOAD_LEN            (64)
+#define IOHOME_MAX_FIFO_LEN                 (256)
+#define IOHOME_UART_IDLE_BITS_MAX           (15)
+
 #pragma endregion CONST
 
 /*!
@@ -61,8 +104,31 @@ struct NodeId {
 };
 
 struct IoHomeChannel_t {
-  uint8_t c0;
+  uint16_t c0;
   uint8_t c1;
+};
+
+/*!
+  \struct IoHomeFrame_t
+  \brief Structure to hold parsed io-homecontrol frame data.
+*/
+struct IoHomeFrame_t {
+  uint8_t ctrlByte0;
+  uint8_t ctrlByte1;
+  NodeId sourceMac;
+  NodeId destMac;
+  uint8_t commandId;
+  std::vector<uint8_t> payload;
+  bool isValid = false; // Indicates if the frame was successfully parsed and CRC validated
+};
+
+struct IoHomeProfile {
+    NodeId sourceMac;
+    NodeId destMac;
+    uint8_t stackKey[16];
+    uint16_t seqCounter;
+    bool active;
+    char description[32];
 };
 
 /*!
@@ -71,41 +137,56 @@ struct IoHomeChannel_t {
 */
 class IoHomeNode {
   public:
-
-    /*!
-      \brief Default constructor.
-      \param phy Pointer to the PhysicalLayer radio module.
-      \param channel Pointer to the io-homecontrol channel to use.
-    */
     IoHomeNode(PhysicalLayer* phy, const IoHomeChannel_t* channel);
 
-    /*!
-      \brief $description
-      \param channel $description
-      \param sourceNodeID $description
-      \param destinationNodeId $description
-      \param stackKey $description
-      \param systemKey $description
-      \returns \ref status_codes
-    */
-    void begin(const IoHomeChannel_t* channel, NodeId source_node_id, NodeId destination_node_id, uint8_t* stack_key, uint8_t* system_key);
+    void loadProfiles(IoHomeProfile* profiles, size_t count);
+    IoHomeProfile* getProfiles() { return _profiles; }
 
-    PhysicalLayer* phyLayer = NULL;
-    const IoHomeChannel_t* channel = NULL;
+    int16_t transmitFrame(const std::vector<uint8_t>& frame);
 
-    // configure common physical layer properties (preamble, sync word etc.)
-    int16_t setPhyProperties();
+    static uint16_t crc16(const uint8_t* data, size_t length);
+    static bool validateFrameCrc(const uint8_t* frame, size_t frameLength);
 
-    // crc16-kermit that takes a uint8_t array of even length and calculates the checksum
-    static uint16_t crc16();
+    std::vector<uint8_t> buildFrame(
+      uint8_t ctrlByte0, uint8_t ctrlByte1,
+      uint8_t commandId, const std::vector<uint8_t>& payload,
+      IoHomeProfile& profile
+    );
 
-    // network-to-host conversion method - takes data from network packet and converts it to the host endians
+    bool parseFrame(const uint8_t* frame, size_t frameLength, IoHomeFrame_t& parsedFrame);
+
+    // Commands
+    int16_t sendButton(uint16_t buttonAction, uint8_t profileIndex);
+    int16_t pollStatus(uint8_t profileIndex);
+
+    // Template helpers (Must be in header)
     template<typename T>
-    static T ntoh(uint8_t* buff, size_t size = 0);
+    static T ntoh(uint8_t* buff, size_t size = 0) {
+      uint8_t* buffPtr = buff;
+      size_t targetSize = (size == 0) ? sizeof(T) : size;
+      T res = 0;
+      for(size_t i = 0; i < targetSize; i++) {
+        res |= (static_cast<T>(*(buffPtr++)) << (8 * i));
+      }
+      return res;
+    }
 
-    // host-to-network conversion method - takes data from host variable and and converts it to network packet endians
     template<typename T>
-    static void hton(uint8_t* buff, T val, size_t size = 0);
-};
+    static void hton(uint8_t* buff, T val, size_t size = 0) {
+      uint8_t* buffPtr = buff;
+      size_t targetSize = (size == 0) ? sizeof(T) : size;
+      for(size_t i = 0; i < targetSize; i++) {
+        *(buffPtr++) = static_cast<uint8_t>((val >> (8 * i)) & 0xFF);
+      }
+    }
 
-#endif
+  private:
+    // Encapsulated members (The "Guts" of the node)
+    PhysicalLayer* _phyLayer;
+    const IoHomeChannel_t* _channel;
+
+    IoHomeProfile _profiles[5];
+    size_t _numProfiles = 0;
+}; // <--- This closes the class
+
+#endif // <--- This closes the header guard
